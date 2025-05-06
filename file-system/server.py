@@ -1,28 +1,127 @@
-import base64
-from mimetypes import guess_type
-from pathlib import Path
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from typing import Dict, Any, List
 import mcp.types as types
 import asyncio
+import os,sys
+from typing import Optional, Dict, Any,List
+from mcp.server.stdio import stdio_server
 from pydantic import AnyUrl
-import os
-from urllib.parse import urlparse, parse_qs
-import subprocess
 
-app = Server(
-    name="Coding Server", 
-    version="0.0.1", 
+server=Server(
+    name="file-system",
+    instructions="You are a file system MCP server . You can create, read, update, and delete files and directories. You can also list the contents of a directory. You can only access files and directories that are in the base working directory. You cannot access files and directories outside of the current base directory.",
+    version="0.1",
 )
 
-@app.list_resources()
+
+def check_path_security(allowed_base_path: str, target_path: str) -> dict:
+    """
+    Checks if a target_path is allowed based on the allowed_base_path.
+
+    This involves:
+    1. Normalizing and resolving real paths for both inputs.
+    2. Checking if the normalized paths exist on the filesystem.
+    3. On Windows, checking if paths are on the same drive.
+    4. Checking if the target path is a child path (or the same) as the base path
+       using a secure relative path comparison.
+
+    Args:
+        allowed_base_path: The root directory path that is permitted.
+        
+        target_path: The path to a file or directory to check.
+                     
+
+    Returns:
+        A dictionary containing detailed results of the checks:
+        - 'original_base': The input allowed_base_path string.
+        - 'original_target': The input target_path string.
+        - 'normalized_base': The normalized and real path of the base, or None if normalization failed.
+        - 'normalized_target': The normalized and real path of the target, or None if normalization failed.
+        - 'normalization_successful': bool, True if normalization succeeded.
+        - 'base_exists': bool, True if normalized_base_path exists.
+        - 'target_exists': bool, True if normalized_target_path exists.
+        - 'same_drive_check': bool, True if paths are on the same drive (Windows only, always True otherwise).
+        - 'relative_path_from_base': str, The path from normalized_base to normalized_target, or None if not applicable.
+        - 'is_within_base': bool, True if the relative path doesn't go outside the base.
+        - 'is_allowed': bool, The final decision (True if all checks pass).
+        - 'message': str, A human-readable summary of the result.
+    """
+    results = {
+        'original_base': allowed_base_path,
+        'original_target': target_path,
+        'normalized_base': None,
+        'normalized_target': None,
+        'normalization_successful': False,
+        'base_exists': False,
+        'target_exists': False,
+        'same_drive_check': True,
+        'relative_path_from_base': None,
+        'is_within_base': False,
+        'is_allowed': False,
+        'message': ''
+    }
+
+    try:
+        normalized_base = os.path.realpath(os.path.normpath(allowed_base_path))
+        normalized_target = os.path.realpath(os.path.normpath(target_path))
+        results['normalized_base'] = normalized_base
+        results['normalized_target'] = normalized_target
+        results['normalization_successful'] = True
+    except Exception as e:
+        results['message'] = f"Normalization error: {e}"
+        return results
+
+    if not os.path.exists(normalized_base) or not os.path.isdir(normalized_base):
+        results['message'] = f"Base path does not exist or not a directory: {normalized_base}"
+        return results
+    results['base_exists'] = True
+
+    if not os.path.exists(normalized_target):
+        results['message'] = f"Target does not exist: {normalized_target}"
+        return results
+    results['target_exists'] = True
+
+    # Windows drive check
+    if sys.platform == 'win32':
+        base_drive = os.path.splitdrive(normalized_base)[0].lower()
+        tgt_drive = os.path.splitdrive(normalized_target)[0].lower()
+        if base_drive != tgt_drive:
+            results['same_drive_check'] = False
+            results['message'] = f"Different drive: {tgt_drive} vs {base_drive}"
+            return results
+
+    # Relative path
+    try:
+        rel = os.path.relpath(normalized_target, start=normalized_base)
+        results['relative_path_from_base'] = rel
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            results['message'] = f"Outside base: {rel}"
+            return results
+        results['is_within_base'] = True
+        results['is_allowed'] = True
+        results['message'] = "Path is allowed"
+    except Exception as e:
+        results['message'] = f"Relative path error: {e}"
+        return results
+
+    return results
+
+
+
+@server.list_resources()
 async def list_resources() -> list[types.Resource]:
     """
     Expose two resource schemas:
       1. file:///{path} for reading text files
       2. filesystem://list?path={path} for directory listings
     """
+    
+async def list_resources() -> list[types.Resource]:
+    """
+    Expose two resource schemas:
+      1. file:///{path} for reading text files
+      2. filesystem://list?path={path} for directory listings
+    """
+    
     return [
         types.Resource(
             uri="file:///{path}",
@@ -51,9 +150,9 @@ async def list_resources() -> list[types.Resource]:
             readOnlyHint=True,
         ),
     ]
-
-
-@app.read_resource()
+    
+    
+@server.read_resource()
 async def read_resource(uri: AnyUrl) -> str:
     """
     Handle file and directory-listing URIs, returning text or JSON.
@@ -77,629 +176,12 @@ async def read_resource(uri: AnyUrl) -> str:
 
 
 
-PROMPTS = {
-    "python": types.Prompt(
-        name="Python",
-        description="Python code boilerplate",
-        arguments=[
-            types.PromptArgument(
-                name="code_description",
-                description="Description of the code to be generated",
-                required=True,
-            )
-        ]
-    ),
-    "javascript": types.Prompt(
-        name="JavaScript",
-        description="JavaScript code boilerplate",
-        arguments=[
-            types.PromptArgument(
-                name="code_description",
-                description="Description of the code to be generated",
-                required=True,
-            )
-        ]
-    ),
-    "html": types.Prompt(
-        name="HTML",
-        description="HTML code boilerplate",
-        arguments=[
-            types.PromptArgument(
-                name="code_description",
-                description="Description of the code to be generated",
-                required=True,
-            )
-        ]
-    ),
-    "css": types.Prompt(
-        name="CSS",
-        description="CSS code boilerplate",
-        arguments=[
-            types.PromptArgument(
-                name="code_description",
-                description="Description of the code to be generated",
-                required=True,
-            )
-        ]
-    ),
-    "rust": types.Prompt(
-        name="Rust",
-        description="Rust code boilerplate",
-        arguments=[
-            types.PromptArgument(
-                name="code_description",
-                description="Description of the code to be generated",
-                required=True,
-            )
-        ]
-    ),
-    "summarize-output": types.Prompt(
-        name="summarize-output",
-        description="Summarize the stdout/stderr from a program execution",
-        arguments=[
-            types.PromptArgument(
-                name="output",
-                description="Captured program stdout and stderr",
-                required=True
-            )
-        ],
-        idempotentHint=True
-    )
-}
-
-
-@app.list_prompts()
-async def list_prompts() -> list[types.Prompt]:
-    """
-    Returns a list of available prompts.
-    """
-    return list(PROMPTS.values())
-    
-
-@app.get_prompt()
-async def get_prompt(prompt_name: str, arguments: Dict[str, str]) -> types.GetPromptResult:
-    """
-    Returns a prompt by name.
-    """
-    if prompt_name not in PROMPTS:
-        raise ValueError(f"Prompt not found: {prompt_name}")
-    elif prompt_name == "python":
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="system",
-                    content=types.TextContent(type="text", text=f"Your are a Python developer and expert."),
-                ),
-                types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=f"Generate a Python code for {arguments['code_description']}"),
-                ),
-            ]
-        )
-    elif prompt_name == "javascript":
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="system",
-                    content=types.TextContent(type="text", text=f"Your are a JavaScript developer and expert."),
-                ),
-                types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=f"Generate a JavaScript code for {arguments['code_description']}"),
-                ),
-            ]
-        )
-    elif prompt_name == "html":
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="system",
-                    content=types.TextContent(type="text", text=f"Your are a HTML developer and expert."),
-                ),
-                types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=f"Generate a HTML code for {arguments['code_description']}"),
-                ),
-            ]
-        )
-    elif prompt_name == "css":
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="system",
-                    content=types.TextContent(type="text", text=f"Your are a CSS developer and expert."),
-                ),
-                types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=f"Generate a CSS code for {arguments['code_description']}"),
-                ),
-            ]
-        )
-    elif prompt_name == "rust":
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="system",
-                    content=types.TextContent(type="text", text=f"Your are a Rust developer and expert."),
-                ),
-                types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=f"Generate a Rust code for {arguments['code_description']}"),
-                ),
-            ]
-        )
-    elif prompt_name == "summarize-output":
-        return types.GetPromptResult(
-            messages=[
-                types.PromptMessage(
-                    role="system",
-                    content=types.TextContent(type="text", text=f"Your are a helpful assistant that will summarize the code's output properly."),
-                ),
-                types.PromptMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=f"Summarize the output of the program: {arguments['output']}"),
-                ),
-            ]
-        )
-    
-
-@app.list_tools()
-async def list_tools() -> list[types.Tool]:
-    """
-    Returns a list of available tools.
-    """
-    return [
-        types.Tool(
-            name="write-python-file",
-            description="Write a new python file to the filesystem",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute python filesystem path to the file"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the python file"
-                    }
-                },
-                "required": ["path", "content"],
-                "additionalProperties": False
-            },
-        ),
-        types.Tool(
-            name="write-javascript-file",
-            description="Write a new javascript file to the filesystem",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute javascript filesystem path to the file"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the javascript file"
-                    }
-                },
-                "required": ["path", "content"],
-                "additionalProperties": False
-            },
-        ),
-        types.Tool(
-            name="write-html-file",
-            description="Write a new html file to the filesystem",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute html filesystem path to the file"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the html file"
-                    }
-                },
-                "required": ["path", "content"], 
-                "additionalProperties": False
-            },
-        ),
-        types.Tool(
-            name="write-css-file",
-            description="Write a new css file to the filesystem",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute css filesystem path to the file"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write to the css file"
-                    }
-                },
-                "required": ["path", "content"],
-                "additionalProperties": False
-            },
-        ),
-        types.Tool(
-            name="delete-file",
-            description="Delete a file with file-path",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute filesystem path to the file"
-                    }
-                },
-                "required": ["path"],
-                "additionalProperties": False
-            },
-        ),
-        types.Tool(
-            name="Explain-code",
-            description="Explain a code snippet",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "language": {
-                        "type": "string",
-                        "description": "Programming language of the code snippet"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Code snippet path to explain"
-                    }
-                },
-                "required": ["language", "path"],
-                "additionalProperties": False
-            },
-        ),
-        types.Tool(
-            name="exec-program",
-            description="Execute any type of program file and return its output",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to an executable script or program file"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": {"type":"string"},
-                        "description": "Command-line arguments to pass (optional)"
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Programming language of the file (e.g., python, node, php, ruby, etc.)"
-                    }
-                },
-                "required": ["path", "language"],
-                "additionalProperties": False
-            },
-            idempotentHint=False,
-            destructiveHint=False
-        )
-    ]
-
-
-@app.call_tool()
-async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> list[types.TextContent]:
-    """
-    Calls a tool by name with validated arguments.
-    """
-    if tool_name not in ["write-python-file", "write-javascript-file", "write-html-file", 
-                         "write-css-file", "exec-and-summarize", "delete-file", "Explain-code"]:
-        raise ValueError(f"Tool not found: {tool_name}")
-    
-    if tool_name == "write-python-file":
-        if not arguments.get("path", "").endswith(".py"):
-           raise ValueError("File path must end with .py")
-        
-        path = arguments["path"]
-        content = arguments["content"]
-        with open(path, "w", encoding="utf-8") as file:
-            file.write(content)
-        return [types.TextContent(
-            type="text",
-            text=f"Python file written to {path}"
-        )]
-        
-    elif tool_name == "write-javascript-file":
-        if not arguments.get("path", "").endswith(".js"):
-            raise ValueError("File path must end with .js")
-        
-        path = arguments["path"]
-        content = arguments["content"]
-        with open(path, "w", encoding="utf-8") as file:
-            file.write(content)
-        return [types.TextContent(
-            type="text",
-            text=f"JavaScript file written to {path}"
-        )]
-        
-    elif tool_name == "write-html-file":
-        if not arguments.get("path", "").endswith(".html"):
-            raise ValueError("File path must end with .html")
-        
-        path = arguments["path"]
-        content = arguments["content"]
-        with open(path, "w", encoding="utf-8") as file:
-            file.write(content)
-        return [types.TextContent(
-            type="text",
-            text=f"HTML file written to {path}"
-        )]
-        
-    elif tool_name == "write-css-file":
-        if not arguments.get("path", "").endswith(".css"):
-            raise ValueError("File path must end with .css")
-        
-        path = arguments["path"]
-        content = arguments["content"]
-        with open(path, "w", encoding="utf-8") as file:
-            file.write(content)
-        return [types.TextContent(
-            type="text",
-            text=f"CSS file written to {path}"
-        )]
-        
-    elif tool_name == "delete-file":
-        path = arguments["path"]
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"File not found: {path}")
-        
-        os.remove(path)
-        return [types.TextContent(
-            type="text",
-            text=f"File deleted: {path}"
-        )]
-        
-    elif tool_name == "explain-code":
-        path = arguments["path"]
-        
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"File not found: {path}")
-            
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as file:
-                code_content = file.read()
-            
-            # Determine language based on file extension
-            extension = os.path.splitext(path)[1].lower()
-            language_map = {
-                ".py": "Python",
-                ".js": "JavaScript",
-                ".html": "HTML",
-                ".css": "CSS",
-                ".java": "Java",
-                ".c": "C",
-                ".cpp": "C++",
-                ".cs": "C#",
-                ".go": "Go",
-                ".php": "PHP",
-                ".rb": "Ruby",
-                ".rs": "Rust",
-                ".sh": "Shell",
-                ".ts": "TypeScript",
-                ".swift": "Swift",
-                ".kt": "Kotlin",
-                ".pl": "Perl",
-                ".r": "R",
-                ".sql": "SQL"
-            }
-            language = language_map.get(extension, "Unknown")
-            
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"Code explanation for {language} file ({path}):\n\n{code_content}"
-                )
-            ]
-        except Exception as e:
-            raise ValueError(f"Error reading file: {e}")
-        
-    elif tool_name == "exec-program":
-        path = arguments["path"]
-        args = arguments.get("args", [])
-        language = arguments["language"].lower()
-        
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"File not found: {path}")
-        
-        # Dictionary mapping language to interpreter/command
-        interpreters = {
-            "python": "python",
-            "python2": "python2",
-            "python3": "python3",
-            "node": "node",
-            "javascript": "node",
-            "php": "php",
-            "ruby": "ruby",
-            "perl": "perl",
-            "bash": "bash",
-            "sh": "sh",
-            "r": "Rscript",
-            "java": "java",
-            "c": "cc",
-            "cpp": "g++",
-            "go": "go run",
-            "rust": "rustc",
-            "swift": "swift",
-            "typescript": "ts-node",
-            "kotlin": "kotlin"
-        }
-        
-        # Special handling for compiled languages
-        compiled_languages = ["c", "cpp", "java", "rust", "go"]
-        
-        try:
-            if language in compiled_languages:
-                # Handle compilation and execution for compiled languages
-                if language == "c":
-                    output_path = path.replace(".c", ".out")
-                    compile_cmd = await asyncio.create_subprocess_shell(
-                        f"gcc {path} -o {output_path}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    _, compile_stderr = await compile_cmd.communicate()
-                    
-                    if compile_cmd.returncode != 0:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Compilation error:\n{compile_stderr.decode()}"
-                        )]
-                    
-                    exec_cmd = await asyncio.create_subprocess_exec(
-                        output_path, *args,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    
-                elif language == "cpp":
-                    output_path = path.replace(".cpp", ".out")
-                    compile_cmd = await asyncio.create_subprocess_shell(
-                        f"g++ {path} -o {output_path}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    _, compile_stderr = await compile_cmd.communicate()
-                    
-                    if compile_cmd.returncode != 0:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Compilation error:\n{compile_stderr.decode()}"
-                        )]
-                    
-                    exec_cmd = await asyncio.create_subprocess_exec(
-                        output_path, *args,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    
-                elif language == "java":
-                    # Extract class name (assuming it matches the filename)
-                    class_name = os.path.basename(path).replace(".java", "")
-                    dir_path = os.path.dirname(path)
-                    
-                    # Compile Java file
-                    compile_cmd = await asyncio.create_subprocess_shell(
-                        f"javac {path}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    _, compile_stderr = await compile_cmd.communicate()
-                    
-                    if compile_cmd.returncode != 0:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Java compilation error:\n{compile_stderr.decode()}"
-                        )]
-                    
-                    # Execute Java class
-                    exec_cmd = await asyncio.create_subprocess_shell(
-                        f"java -cp {dir_path} {class_name} {' '.join(args)}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    
-                elif language == "rust":
-                    output_path = path.replace(".rs", ".out")
-                    compile_cmd = await asyncio.create_subprocess_shell(
-                        f"rustc {path} -o {output_path}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    _, compile_stderr = await compile_cmd.communicate()
-                    
-                    if compile_cmd.returncode != 0:
-                        return [types.TextContent(
-                            type="text",
-                            text=f"Rust compilation error:\n{compile_stderr.decode()}"
-                        )]
-                    
-                    exec_cmd = await asyncio.create_subprocess_exec(
-                        output_path, *args,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    
-                elif language == "go":
-                    # Go can be run directly with "go run"
-                    exec_cmd = await asyncio.create_subprocess_shell(
-                        f"go run {path} {' '.join(args)}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                
-                # Get output from the executed program
-                stdout, stderr = await exec_cmd.communicate()
-                output = stdout.decode() + ("\n--- STDERR ---\n" + stderr.decode() if stderr else "")
-                
-            else:
-                # Handle interpreted languages
-                if language not in interpreters:
-                    raise ValueError(f"Unsupported language: {language}")
-                
-                interpreter = interpreters[language]
-                
-                # Make sure script is executable for shell scripts
-                if language in ["bash", "sh"]:
-                    os.chmod(path, 0o755)
-                
-                # Execute the script with the appropriate interpreter
-                exec_cmd = await asyncio.create_subprocess_shell(
-                    f"{interpreter} {path} {' '.join(args)}",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                
-                stdout, stderr = await exec_cmd.communicate()
-                output = stdout.decode() + ("\n--- STDERR ---\n" + stderr.decode() if stderr else "")
-            
-            return [types.TextContent(
-                type="text",
-                text=f"Program executed ({language}). Exit code: {exec_cmd.returncode}\n\nOutput:\n\n{output}"
-            )]
-            
-        except Exception as e:
-            return [types.TextContent(
-                type="text",
-                text=f"Error executing {language} program: {str(e)}"
-            )]
- 
-    elif tool_name == "Explain-code":
-        language = arguments["language"]
-        path = arguments["path"]
-        
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"File not found: {path}")
-            
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as file:
-                code_content = file.read()
-            
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"Code explanation for {language}:\n\n{code_content}"
-                )
-            ]
-        except Exception as e:
-            raise ValueError(f"Error reading file: {e}")
-
 async def main() -> None:
     async with stdio_server() as streams:
-        await app.run(
+        await server.run(
             read_stream=streams[0],
             write_stream=streams[1],
-            initialization_options=app.create_initialization_options()
+            initialization_options=server.create_initialization_options()
         )
 
 

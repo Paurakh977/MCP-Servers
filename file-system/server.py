@@ -10,15 +10,363 @@ import mimetypes
 import json
 import time
 
+# Direct imports for required libraries
+try:
+    import PyPDF2
+except ImportError:
+    print("PyPDF2 not installed. To read PDF files: pip install PyPDF2")
+
+try:
+    import docx  # for .docx files
+except ImportError:
+    print("python-docx not installed. To read Word files: pip install python-docx")
+
+try:
+    import fitz  # PyMuPDF
+    has_pymupdf = True
+except ImportError:
+    has_pymupdf = False
+    print("PyMuPDF not installed. For better PDF image detection: pip install pymupdf")
+
+try:
+    import openpyxl  # for .xlsx files
+except ImportError:
+    print("openpyxl not installed. To read Excel files: pip install openpyxl")
+
+try:
+    from pptx import Presentation  # for .pptx files
+except ImportError:
+    print("python-pptx not installed. To read PowerPoint files: pip install python-pptx")
+
+try:
+    import pdfplumber
+    has_pdfplumber = True
+except ImportError:
+    has_pdfplumber = False
+    print("pdfplumber not installed. For better PDF text extraction: pip install pdfplumber")
+
+try:
+    import tabula
+    has_tabula = True
+except ImportError:
+    has_tabula = False
+    print("Tabula-py not installed. For better PDF table extraction: pip install tabula-py")
+
+try:
+    from PIL import Image
+    has_pil = True
+except ImportError:
+    print("Pillow not installed. For better image analysis: pip install Pillow")
+    has_pil = False
+
+try:
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    has_epub_support = True
+except ImportError:
+    has_epub_support = False
+    print("EPUB support not available. To read EPUB files: pip install ebooklib beautifulsoup4")
+
+try:
+    import striprtf.striprtf as striprtf
+    has_rtf_support = True
+except ImportError:
+    has_rtf_support = False
+    print("RTF support not available. To read RTF files: pip install striprtf")
+
 # Import our file extraction utilities
 from resources import extract_file_content, read_file
 from resources.readers import (
     read_text_file, read_pdf_file, read_docx_file, read_xlsx_file,
     read_pptx_file, read_csv_file, read_epub_file, read_rtf_file,
-    has_pymupdf, has_tabula, has_pdfplumber, has_pil,
+    has_tabula, has_pdfplumber, has_pil,
     has_epub_support, has_rtf_support
 )
 from resources.utils.formatters import summarize_content
+
+# Override the problematic reader functions with direct implementations
+def patched_read_pdf_file(file_path: str) -> str:
+    """Extract text and identify images from PDF files with layout preservation."""
+    content = []
+    
+    # Try pdfplumber first if available
+    if has_pdfplumber:
+        try:
+            content.append("--- Document Metadata ---")
+            pdf = pdfplumber.open(file_path)
+            
+            # Basic document info
+            content.append(f"PDF Document: {os.path.basename(file_path)}")
+            content.append(f"Number of pages: {len(pdf.pages)}")
+            
+            # Try to extract metadata
+            if hasattr(pdf, 'metadata') and pdf.metadata:
+                for key, value in pdf.metadata.items():
+                    if value and str(value).strip():
+                        # Clean up key name
+                        clean_key = key[1:] if isinstance(key, str) and key.startswith('/') else key
+                        content.append(f"{clean_key}: {value}")
+            
+            content.append("-" * 40)
+            
+            # Process each page
+            for i, page in enumerate(pdf.pages):
+                content.append(f"--- Page {i + 1} ---")
+                
+                # Extract page dimensions
+                width, height = page.width, page.height
+                content.append(f"Page dimensions: {width:.2f} x {height:.2f} points")
+                
+                # Extract text with layout preservation
+                page_text = page.extract_text(x_tolerance=3, y_tolerance=3)
+                
+                # Try to detect tables
+                tables = page.extract_tables()
+                if tables:
+                    content.append(f"[Contains {len(tables)} table{'s' if len(tables) > 1 else ''}]")
+                    
+                    # Format each table
+                    for t_idx, table in enumerate(tables):
+                        content.append(f"\nTable {t_idx + 1}:")
+                        
+                        # Format the table with proper alignment
+                        for row in table:
+                            # Clean row data and handle None values
+                            cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
+                            row_text = " | ".join(cleaned_row)
+                            content.append(row_text)
+                        
+                        content.append("")  # Add spacing after table
+                
+                # Add the page text with layout preservation
+                if not page_text or page_text.isspace():
+                    content.append("[This page appears to be empty or contains only non-text elements]")
+                else:
+                    content.append(page_text)
+            
+            pdf.close()
+            return "\n\n".join(content)
+        except Exception as e:
+            print(f"pdfplumber processing failed: {str(e)}. Trying PyMuPDF.")
+    
+    # Try PyMuPDF if available
+    if has_pymupdf:
+        try:
+            pdf_document = fitz.open(file_path)
+            
+            # Extract document metadata
+            content.append("--- Document Metadata ---")
+            metadata = pdf_document.metadata
+            for key, value in metadata.items():
+                if value:
+                    content.append(f"{key}: {value}")
+            content.append("-" * 40)
+            
+            # Document summary
+            content.append(f"PDF Document: {os.path.basename(file_path)}")
+            content.append(f"Number of pages: {len(pdf_document)}")
+            content.append(f"PDF Version: {pdf_document.pdf_version}")
+            if pdf_document.is_encrypted:
+                content.append("Status: Encrypted")
+            
+            content.append("-" * 40)
+            
+            # Process each page
+            for page_num, page in enumerate(pdf_document):
+                content.append(f"--- Page {page_num + 1} ---")
+                
+                # Get page text
+                page_text = page.get_text()
+                
+                # Add the page text
+                if not page_text.strip():
+                    content.append("[This page appears to be empty or contains only non-text elements]")
+                else:
+                    content.append(page_text.strip())
+            
+            return "\n\n".join(content)
+        except Exception as e:
+            print(f"PyMuPDF processing failed: {str(e)}. Falling back to PyPDF2.")
+    
+    # Use PyPDF2 as final fallback
+    try:
+        with open(file_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            num_pages = len(pdf_reader.pages)
+            
+            # Try to get document info
+            content.append("--- Document Metadata ---")
+            info = pdf_reader.metadata
+            if info:
+                for key in info:
+                    if info.get(key):
+                        # Clean up key name by removing leading slash
+                        clean_key = key[1:] if key.startswith('/') else key
+                        content.append(f"{clean_key}: {info.get(key)}")
+            
+            # Add document summary
+            content.append(f"PDF Document: {os.path.basename(file_path)}")
+            content.append(f"Number of pages: {num_pages}")
+            content.append("-" * 40)
+            
+            # Extract text from each page
+            for page_num in range(num_pages):
+                page = pdf_reader.pages[page_num]
+                
+                # Start page content
+                content.append(f"--- Page {page_num + 1} ---")
+                
+                # Extract text with better layout handling
+                try:
+                    page_text = page.extract_text()
+                except:
+                    page_text = "Error extracting text from this page"
+                
+                # Handle empty pages
+                if not page_text or page_text.isspace():
+                    content.append("[This page appears to be empty or contains only non-text elements]")
+                else:
+                    content.append(page_text)
+        
+        return "\n\n".join(content)
+    except Exception as e:
+        return f"Error reading PDF file: {str(e)}"
+
+def patched_read_docx_file(file_path: str) -> str:
+    """Extract text and identify objects from Microsoft Word (.docx) files in sequential order."""
+    try:
+        doc = docx.Document(file_path)
+        full_text = []
+        
+        # Document properties first
+        try:
+            full_text.append("--- Document Properties ---")
+            core_props = doc.core_properties
+            if hasattr(core_props, 'title') and core_props.title:
+                full_text.append(f"Title: {core_props.title}")
+            if hasattr(core_props, 'author') and core_props.author:
+                full_text.append(f"Author: {core_props.author}")
+            if hasattr(core_props, 'created') and core_props.created:
+                full_text.append(f"Created: {core_props.created}")
+            if hasattr(core_props, 'modified') and core_props.modified:
+                full_text.append(f"Modified: {core_props.modified}")
+            full_text.append("-" * 40)
+        except:
+            pass  # Ignore if properties can't be accessed
+        
+        # Document statistics
+        full_text.append("--- Document Statistics ---")
+        full_text.append(f"Paragraphs: {len(doc.paragraphs)}")
+        full_text.append(f"Sections: {len(doc.sections)}")
+        full_text.append(f"Tables: {len(doc.tables)}")
+        full_text.append("-" * 40)
+        
+        # Main content extraction
+        full_text.append("--- Document Content ---")
+        
+        # Get paragraphs
+        for para in doc.paragraphs:
+            if para.text.strip():  # Skip empty paragraphs
+                full_text.append(para.text)
+        
+        # Process tables
+        for i, table in enumerate(doc.tables):
+            full_text.append(f"\n--- Table {i+1} ---")
+            
+            for row in table.rows:
+                row_cells = []
+                for cell in row.cells:
+                    text = cell.text.strip()
+                    row_cells.append(text if text else "")
+                full_text.append(" | ".join(row_cells))
+            
+            full_text.append("--- End Table ---\n")
+        
+        return "\n".join(full_text)
+    except Exception as e:
+        return f"Error reading DOCX file: {str(e)}"
+
+# Replace imported functions with our patched versions
+read_pdf_file = patched_read_pdf_file
+read_docx_file = patched_read_docx_file
+
+# Patched version of extract_file_content
+def patched_extract_file_content(file_path: str) -> Dict[str, Any]:
+    """Extract content from a file based on its extension."""
+    if not os.path.exists(file_path):
+        return {"success": False, "error": f"File not found: {file_path}", "content": ""}
+    
+    file_extension = os.path.splitext(file_path)[1].lower()
+    content = ""
+    
+    try:
+        # Handle different file types
+        if file_extension in ['.txt', '.md', '.json', '.html', '.xml', '.log', '.py', '.js', '.css', '.java', '.ini', '.conf', '.cfg']:
+            content = read_text_file(file_path)
+        elif file_extension == '.pdf':
+            content = patched_read_pdf_file(file_path)
+        elif file_extension == '.docx':
+            content = patched_read_docx_file(file_path)
+        elif file_extension == '.xlsx':
+            content = read_xlsx_file(file_path)
+        elif file_extension == '.pptx':
+            content = read_pptx_file(file_path)
+        elif file_extension == '.csv':
+            content = read_csv_file(file_path)
+        elif file_extension == '.epub':
+            content = read_epub_file(file_path)
+        elif file_extension == '.rtf':
+            content = read_rtf_file(file_path)
+        else:
+            # Try to read as text file first, then fall back to binary warning
+            try:
+                content = read_text_file(file_path)
+            except Exception:
+                return {
+                    "success": False, 
+                    "error": f"Unsupported file type: {file_extension}", 
+                    "content": f"This file type ({file_extension}) is not directly supported."
+                }
+        
+        return {"success": True, "content": content, "file_path": file_path, "file_type": file_extension}
+    
+    except Exception as e:
+        return {"success": False, "error": str(e), "content": ""}
+
+# Patched version of read_file
+def patched_read_file(path: str, summarize: bool = False, max_summary_length: int = 500) -> Dict[str, Any]:
+    """
+    Reads and returns the contents of the file at 'path' with appropriate handling per file type.
+    
+    Args:
+        path (str): Path to the file to read
+        summarize (bool): Whether to summarize very large content
+        max_summary_length (int): Maximum length for summary if summarizing
+        
+    Returns:
+        Dict with keys:
+        - success (bool): Whether the read was successful
+        - content (str): The file content, possibly summarized
+        - file_path (str): Original file path
+        - file_type (str): File extension
+        - error (str, optional): Error message if success is False
+    """
+    result = patched_extract_file_content(path)
+    
+    # Summarize very large content if requested
+    if summarize and result["success"] and len(result["content"]) > max_summary_length:
+        result["content"] = summarize_content(result["content"], max_summary_length)
+        result["summarized"] = True
+    
+    return result
+
+# Override the imported functions with our patched versions
+extract_file_content = patched_extract_file_content
+read_file = patched_read_file
+
+# Initialize allowed directories list - will be populated with command-line arguments
+allowed_directories = [os.getcwd()]  # Default to current directory
 
 server = Server(
     name="file-system",
@@ -27,97 +375,111 @@ server = Server(
 )
 
 
-def check_path_security(allowed_base_path: str, target_path: str) -> dict:
+def check_path_security(allowed_base_paths: List[str], target_path: str) -> dict:
     """
-    Checks if a target_path is allowed based on the allowed_base_path.
-
-    This involves:
-    1. Normalizing and resolving real paths for both inputs.
-    2. Checking if the normalized paths exist on the filesystem.
-    3. On Windows, checking if paths are on the same drive.
-    4. Checking if the target path is a child path (or the same) as the base path
-       using a secure relative path comparison.
-
+    Checks if a target_path is allowed based on any of the allowed_base_paths.
+    
     Args:
-        allowed_base_path: The root directory path that is permitted.
-        
-        target_path: The path to a file or directory to check.
-                     
-
+        allowed_base_paths: List of allowed root directory paths.
+        target_path: Path to a file or directory to check.
+    
     Returns:
-        A dictionary containing detailed results of the checks:
-        - 'original_base': The input allowed_base_path string.
-        - 'original_target': The input target_path string.
-        - 'normalized_base': The normalized and real path of the base, or None if normalization failed.
-        - 'normalized_target': The normalized and real path of the target, or None if normalization failed.
-        - 'normalization_successful': bool, True if normalization succeeded.
-        - 'base_exists': bool, True if normalized_base_path exists.
-        - 'target_exists': bool, True if normalized_target_path exists.
-        - 'same_drive_check': bool, True if paths are on the same drive (Windows only, always True otherwise).
-        - 'relative_path_from_base': str, The path from normalized_base to normalized_target, or None if not applicable.
-        - 'is_within_base': bool, True if the relative path doesn't go outside the base.
-        - 'is_allowed': bool, The final decision (True if all checks pass).
-        - 'message': str, A human-readable summary of the result.
+        Dictionary containing detailed results of the checks.
     """
+    # Initialize results with default values for path that's not allowed
     results = {
-        'original_base': allowed_base_path,
         'original_target': target_path,
-        'normalized_base': None,
         'normalized_target': None,
         'normalization_successful': False,
-        'base_exists': False,
         'target_exists': False,
+        'same_drive_check': True,
+        'is_within_base': False,
+        'is_allowed': False,
+        'message': '',
+        'allowed_base': None,  # Track which allowed base succeeded
+    }
+
+    try:
+        normalized_target = os.path.realpath(os.path.normpath(target_path))
+        results['normalized_target'] = normalized_target
+        results['normalization_successful'] = True
+    except Exception as e:
+        results['message'] = f"Normalization error for target: {e}"
+        return results
+
+    if not os.path.exists(normalized_target):
+        results['message'] = f"Target does not exist: {normalized_target}"
+        return results
+    results['target_exists'] = True
+    
+    # Try each allowed base path until one succeeds
+    for base_path in allowed_base_paths:
+        base_check = check_against_single_base(base_path, normalized_target)
+        
+        # If this base path works, use its results
+        if base_check['is_allowed']:
+            # Copy all relevant results from the successful check
+            results['is_allowed'] = True
+            results['is_within_base'] = True
+            results['same_drive_check'] = True
+            results['message'] = f"Path is allowed via {base_path}"
+            results['allowed_base'] = base_path
+            results['relative_path_from_base'] = base_check['relative_path_from_base']
+            return results
+    
+    # If we get here, no allowed path matched
+    results['message'] = f"Access denied: Path not within any allowed directory"
+    return results
+
+
+def check_against_single_base(base_path: str, normalized_target: str) -> dict:
+    """Checks a normalized target path against a single base directory."""
+    result = {
+        'original_base': base_path,
+        'normalized_base': None,
+        'base_exists': False,
         'same_drive_check': True,
         'relative_path_from_base': None,
         'is_within_base': False,
         'is_allowed': False,
         'message': ''
     }
-
+    
     try:
-        normalized_base = os.path.realpath(os.path.normpath(allowed_base_path))
-        normalized_target = os.path.realpath(os.path.normpath(target_path))
-        results['normalized_base'] = normalized_base
-        results['normalized_target'] = normalized_target
-        results['normalization_successful'] = True
+        normalized_base = os.path.realpath(os.path.normpath(base_path))
+        result['normalized_base'] = normalized_base
     except Exception as e:
-        results['message'] = f"Normalization error: {e}"
-        return results
-
+        result['message'] = f"Base normalization error: {e}"
+        return result
+    
     if not os.path.exists(normalized_base) or not os.path.isdir(normalized_base):
-        results['message'] = f"Base path does not exist or not a directory: {normalized_base}"
-        return results
-    results['base_exists'] = True
-
-    if not os.path.exists(normalized_target):
-        results['message'] = f"Target does not exist: {normalized_target}"
-        return results
-    results['target_exists'] = True
-
+        result['message'] = f"Base path does not exist or not a directory: {normalized_base}"
+        return result
+    result['base_exists'] = True
+    
     # Windows drive check
     if sys.platform == 'win32':
         base_drive = os.path.splitdrive(normalized_base)[0].lower()
         tgt_drive = os.path.splitdrive(normalized_target)[0].lower()
         if base_drive != tgt_drive:
-            results['same_drive_check'] = False
-            results['message'] = f"Different drive: {tgt_drive} vs {base_drive}"
-            return results
-
+            result['same_drive_check'] = False
+            result['message'] = f"Different drive: {tgt_drive} vs {base_drive}"
+            return result
+    
     # Relative path
     try:
         rel = os.path.relpath(normalized_target, start=normalized_base)
-        results['relative_path_from_base'] = rel
+        result['relative_path_from_base'] = rel
         if rel == os.pardir or rel.startswith(os.pardir + os.sep):
-            results['message'] = f"Outside base: {rel}"
-            return results
-        results['is_within_base'] = True
-        results['is_allowed'] = True
-        results['message'] = "Path is allowed"
+            result['message'] = f"Outside base: {rel}"
+            return result
+        result['is_within_base'] = True
+        result['is_allowed'] = True
+        result['message'] = "Path is allowed"
     except Exception as e:
-        results['message'] = f"Relative path error: {e}"
-        return results
-
-    return results
+        result['message'] = f"Relative path error: {e}"
+    
+    return result
 
 
 def get_mime_type(file_path: str) -> str:
@@ -323,8 +685,6 @@ async def list_resources() -> list[types.Resource]:
       3. directory:///path - List directory contents
       4. file-options:///path - Get available extraction options for a file
     """
-    base_dir = os.getcwd()  # Current working directory as base
-    
     return [
         types.Resource(
             uri="file:///{path}",
@@ -335,7 +695,7 @@ async def list_resources() -> list[types.Resource]:
                 "properties": {
                     "path": {
                         "type": "string", 
-                        "description": "Path to the file relative to current directory"
+                        "description": "Path to the file relative to allowed directories"
                     },
                     "summarize": {
                         "type": "boolean",
@@ -440,7 +800,6 @@ async def read_resource(uri: AnyUrl) -> str:
         Exception: If resource cannot be read or is invalid
     """
     s = str(uri)
-    base_dir = os.getcwd()
     uri_path = ""
     
     # Parse file:/// URI
@@ -465,7 +824,7 @@ async def read_resource(uri: AnyUrl) -> str:
         extract_images = params.get("images", True)
         
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             raise ValueError(f"Access denied: {security_check['message']}")
         
@@ -475,7 +834,6 @@ async def read_resource(uri: AnyUrl) -> str:
         # Process PDF with special handling if needed
         if file_extension == '.pdf' and metadata_only and has_pymupdf:
             # Custom handling for metadata-only PDF extraction
-            import fitz  # PyMuPDF
             try:
                 pdf_document = fitz.open(path)
                 metadata = pdf_document.metadata
@@ -510,7 +868,7 @@ async def read_resource(uri: AnyUrl) -> str:
         path = uri_path
         
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             raise ValueError(f"Access denied: {security_check['message']}")
         
@@ -609,7 +967,7 @@ async def read_resource(uri: AnyUrl) -> str:
         path = uri_path
         
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             raise ValueError(f"Access denied: {security_check['message']}")
         
@@ -632,7 +990,7 @@ async def read_resource(uri: AnyUrl) -> str:
         path = uri_path
         
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             raise ValueError(f"Access denied: {security_check['message']}")
         
@@ -688,7 +1046,7 @@ async def list_tools() -> list[types.Tool]:
     """
     Returns a list of available tools for file operations.
     """
-    return [
+    tools = [
         types.Tool(
             name="read_file",
             description="Read a file with advanced extraction capabilities",
@@ -756,6 +1114,23 @@ async def list_tools() -> list[types.Tool]:
             readOnlyHint=True
         )
     ]
+    
+    # Add a new tool to list allowed directories
+    tools.append(
+        types.Tool(
+            name="list_allowed_directories",
+            description="List directories that this server is allowed to access",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False
+            },
+            idempotentHint=True,
+            readOnlyHint=True
+        )
+    )
+    
+    return tools
 
 
 @server.call_tool()
@@ -763,8 +1138,6 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
     """
     Call a tool by name with arguments.
     """
-    base_dir = os.getcwd()
-
     if tool_name == "read_file":
         path = arguments["path"]
         summarize = arguments.get("summarize", False)
@@ -772,7 +1145,7 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
         metadata_only = arguments.get("metadata_only", False)
 
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             return [types.TextContent(
                 type="text",
@@ -782,7 +1155,6 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
         # Special handling for PDFs with metadata_only
         file_extension = os.path.splitext(path)[1].lower()
         if file_extension == '.pdf' and metadata_only and has_pymupdf:
-            import fitz  # PyMuPDF
             try:
                 pdf_document = fitz.open(path)
                 metadata = pdf_document.metadata
@@ -807,9 +1179,74 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                     type="text",
                     text=f"Error extracting PDF metadata: {str(e)}"
                 )]
+        
+        # Special handling for DOCX with metadata_only
+        elif file_extension == '.docx' and metadata_only:
+            try:
+                try:
+                    doc = docx.Document(path)
+                    metadata = {}
+                    
+                    # Extract core properties
+                    if hasattr(doc, 'core_properties'):
+                        core_props = doc.core_properties
+                        if hasattr(core_props, 'title') and core_props.title:
+                            metadata["title"] = core_props.title
+                        if hasattr(core_props, 'author') and core_props.author:
+                            metadata["author"] = core_props.author
+                        if hasattr(core_props, 'created') and core_props.created:
+                            metadata["created"] = str(core_props.created)
+                        if hasattr(core_props, 'modified') and core_props.modified:
+                            metadata["modified"] = str(core_props.modified)
+                        if hasattr(core_props, 'comments') and core_props.comments:
+                            metadata["comments"] = core_props.comments
+                        if hasattr(core_props, 'category') and core_props.category:
+                            metadata["category"] = core_props.category
+                        if hasattr(core_props, 'subject') and core_props.subject:
+                            metadata["subject"] = core_props.subject
+                        if hasattr(core_props, 'keywords') and core_props.keywords:
+                            metadata["keywords"] = core_props.keywords
+                    
+                    # Document statistics
+                    stats = {
+                        "paragraphs": len(doc.paragraphs),
+                        "sections": len(doc.sections),
+                        "tables": len(doc.tables)
+                    }
+                    
+                    # Get image count
+                    image_count = 0
+                    for rel in doc.part.rels.values():
+                        if rel.reltype == 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image':
+                            image_count += 1
+                    stats["images"] = image_count
+                    
+                    # Format the result
+                    content = {
+                        "metadata": metadata,
+                        "document_statistics": stats,
+                        "file_info": {
+                            "path": path
+                        }
+                    }
+                    
+                    return [types.TextContent(
+                        type="text",
+                        text=f"DOCX Metadata:\n\n{json.dumps(content, indent=2)}"
+                    )]
+                except Exception as e:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Error extracting DOCX metadata: {str(e)}"
+                    )]
+            except Exception as e:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Error: {str(e)}"
+                )]
 
-        # Standard file extraction
-        result = read_file(path, summarize=summarize, max_summary_length=max_length)
+        # Standard file extraction using our utilities
+        result = patched_read_file(path, summarize=summarize, max_summary_length=max_length)
         
         if not result["success"]:
             return [types.TextContent(
@@ -828,7 +1265,7 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
         path = arguments["path"]
         
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             return [types.TextContent(
                 type="text",
@@ -907,7 +1344,7 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
         path = arguments["path"]
         
         # Verify path security
-        security_check = check_path_security(base_dir, path)
+        security_check = check_path_security(allowed_directories, path)
         if not security_check["is_allowed"]:
             return [types.TextContent(
                 type="text",
@@ -971,6 +1408,13 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             text=formatted_info
         )]
     
+    # New tool to list allowed directories
+    elif tool_name == "list_allowed_directories":
+        return [types.TextContent(
+            type="text",
+            text=f"Allowed directories:\n{json.dumps(allowed_directories, indent=2)}"
+        )]
+    
     # Unknown tool
     return [types.TextContent(
         type="text",
@@ -979,6 +1423,15 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
 
 
 async def main() -> None:
+    # Parse command-line arguments for allowed directories
+    global allowed_directories
+    if len(sys.argv) > 1:
+        allowed_directories = [os.path.abspath(os.path.normpath(dir_path)) for dir_path in sys.argv[1:]]
+    
+    print(f"Starting MCP file-system server with allowed directories:", file=sys.stderr)
+    for directory in allowed_directories:
+        print(f"  - {directory}", file=sys.stderr)
+    
     async with stdio_server() as streams:
         await server.run(
             read_stream=streams[0],

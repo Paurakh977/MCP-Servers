@@ -1,132 +1,213 @@
-# MCP File System Server
+# File System MCP Server
 
-A Model Context Protocol (MCP) server that provides file system resources and tools for reading different file formats with enhanced capabilities.
+A powerful MCP (Managed Control Protocol) server for file system operations with advanced capabilities for reading and extracting content from various file types.
 
 ## Features
 
-- Access to file system resources through MCP
-- Rich text extraction from various file formats:
-  - PDF documents (with image detection and layout preservation)
-  - Microsoft Office files (Word, Excel, PowerPoint)
-  - CSV and data files
-  - EPUB ebooks
-  - RTF documents
-  - Plain text files
-- File content summarization
-- Directory listing
+- Read content from various file types with advanced extraction:
+  - PDF documents (including tables, images, and metadata)
+  - Office documents (Word, Excel, PowerPoint)
+  - Text files, CSV, EPUB, RTF, and more
+- Extract metadata and capabilities information for files
+- List directory contents with detailed information
+- Secure path validation and access control
 
 ## Installation
 
-1. Install the required dependencies:
+### Prerequisites
+
+- Python 3.7+
+- For PDF table extraction: Java Runtime Environment (JRE) is required for tabula-py
+
+### Install dependencies (Recommended method using uv)
 
 ```bash
-pip install "mcp[cli]" PyPDF2
+# Clone the repository
+git clone https://github.com/Paurakh977/MCP-Servers.git
+cd file-system
+
+# Create a virtual environment
+uv venv
+
+# Activate the virtual environment
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows:
+.venv\Scripts\activate
+
+# Install dependencies using uv sync (requirements.txt already provided)
+uv sync
 ```
 
-2. For enhanced functionality, install optional dependencies:
+### Alternative installation using pip
 
 ```bash
-# For enhanced PDF support
-pip install pymupdf pdfplumber tabula-py
+# Clone the repository
+git clone https://github.com/Paurakh977/MCP-Servers.git
+cd file-system
 
-# For Office files support
-pip install python-docx openpyxl python-pptx Pillow
+# Create a virtual environment
+python -m venv .venv
 
-# For ebook support
-pip install ebooklib beautifulsoup4
+# Activate the virtual environment
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows:
+.venv\Scripts\activate
 
-# For RTF support
-pip install striprtf
+# Install dependencies
+pip install .
+
 ```
 
-## Usage
+## Running the Server
 
-### Running the MCP Server
+To run the server, you need to specify one or more allowed directories that the server can access:
 
 ```bash
-python main.py
+python server.py /path/to/allowed/directory1 /path/to/allowed/directory2
 ```
 
-This will start the MCP server on the default port.
+The server will only allow access to files within these specified directories for security reasons.
 
-### Integrating with Claude Desktop
+## Integrating with Claude Desktop
 
-To install this server in Claude Desktop:
+To configure Claude desktop to use this MCP server, add the following to your Claude config.json file:
 
-```bash
-mcp install main.py
+### Config File Location
+- Windows: `%APPDATA%\Claude\config.json` (typically `C:\Users\username\AppData\Roaming\Claude\config.json`)
+- macOS: `~/Library/Application Support/Claude/config.json`
+- Linux: `~/.config/Claude/config.json`
+
+If the file doesn't exist, create it with the following content:
+
+```json
+{
+  "mcpServers": {
+    "file-system": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "PyPDF2",
+        "--with",
+        "python-docx",
+        "--with",
+        "openpyxl",
+        "--with",
+        "python-pptx",
+        "--with",
+        "pillow",
+        "--with",
+        "pymupdf",
+        "--with",
+        "pdfplumber",
+        "--with",
+        "tabula-py",
+        "--with",
+        "ebooklib",
+        "--with",
+        "beautifulsoup4",
+        "--with",
+        "striprtf",
+        "PATH_TO_SERVER_PY",
+        "ALLOWED_DIR_1",
+        "ALLOWED_DIR_2",
+        "ALLOWED_DIR_3"
+      ]
+    }
+  }
+}
 ```
 
-### MCP Resources
+Replace:
+- `PATH_TO_SERVER_PY` with the absolute path to the server.py file
+- `ALLOWED_DIR_1`, `ALLOWED_DIR_2`, etc. with the absolute paths to directories you want to give Claude access to
 
-The server exposes the following resources:
+For example:
 
-- `file://{file_path}` - Get the full content of a file
-- `file-summary://{file_path}` - Get a summarized version of a file's content
-- `directory://{dir_path}` - List all files in a directory
-
-### MCP Tools
-
-The server provides the following tools:
-
-- `read_file(file_path, summarize, max_length)` - Read a file with optional summarization
-- `save_file_content(content, file_path)` - Save text content to a file
-- `search_files(directory, pattern, recursive)` - Search for files matching a pattern
-
-## Example Queries for Claude
-
-Once your MCP server is connected to Claude, you can use queries like:
-
-- "Show me the content of my report.pdf file"
-- "Summarize the Excel spreadsheet data.xlsx"
-- "What files are in my documents folder?"
-- "Search for all Python files in the project"
-
-## Module Structure
-
-```
-resources/
-├── __init__.py          # Main package exports
-├── cli.py               # Command-line interface
-├── extractor.py         # Main extraction API
-├── readers/
-│   ├── __init__.py      # Reader exports
-│   ├── data_readers.py  # CSV file readers
-│   ├── ebook_readers.py # EPUB file readers
-│   ├── format_readers.py # RTF file readers
-│   ├── office_readers.py # Word, Excel, PowerPoint readers
-│   ├── pdf_reader.py    # PDF document readers
-│   └── text_reader.py   # Text file readers
-└── utils/
-    ├── __init__.py      # Utilities exports
-    ├── formatters.py    # Output formatting utils
-    └── io_utils.py      # File I/O operations
-```
-
-## Standalone File Reading
-
-The package can also be used standalone without MCP:
-
-```python
-from resources import read_file, print_output
-
-# Read a file
-result = read_file("document.pdf")
-
-# Print the result
-print_output(result)
+```json
+{
+  "mcpServers": {
+    "file-system": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "PyPDF2",
+        "--with",
+        "python-docx",
+        "--with",
+        "openpyxl",
+        "--with",
+        "python-pptx",
+        "--with",
+        "pillow",
+        "--with",
+        "pymupdf",
+        "--with",
+        "pdfplumber",
+        "--with",
+        "tabula-py",
+        "--with",
+        "ebooklib",
+        "--with",
+        "beautifulsoup4",
+        "--with",
+        "striprtf",
+        "C:\\Users\\username\\file-system\\server.py",
+        "C:\\Users\\username\\Documents",
+        "C:\\Users\\username\\Downloads"
+      ]
+    }
+  }
+}
 ```
 
-## Command-Line Usage
+After updating the config file, restart Claude Desktop for the changes to take effect.
 
-The module also provides a command-line interface:
+## Usage in Claude
 
-```bash
-python -m resources.cli document.pdf --summarize --max-length 1000
-```
+Once the server is configured, Claude can access your files and directories. You can ask Claude to:
 
-Or use interactive mode:
+1. Read file content:
+   - "Read the PDF document at C:\\Users\\username\\Documents\\report.pdf"
+   - "Summarize the content of my Word document at C:\\Users\\username\\Documents\\document.docx"
 
-```bash
-python -m resources.cli
-```
+2. List directory contents:
+   - "List all files in my Downloads folder"
+   - "Show me what documents I have in C:\\Users\\username\\Documents"
+
+3. Get file information:
+   - "What information can you extract from this Excel file: C:\\Users\\username\\Documents\\spreadsheet.xlsx?"
+   - "Tell me about this PDF file at C:\\Users\\username\\Documents\\document.pdf"
+
+## Supported File Types
+
+- Text files (.txt, .md, .json, .html, .xml, .log, .py, .js, .css, .java, .ini, .conf, .cfg)
+- PDF documents (.pdf)
+- Microsoft Word documents (.docx)
+- Microsoft Excel spreadsheets (.xlsx)
+- Microsoft PowerPoint presentations (.pptx)
+- CSV files (.csv)
+- EPUB e-books (.epub)
+- Rich Text Format (.rtf)
+
+## Security
+
+- The server implements strict path validation to prevent access outside allowed directories
+- Access is limited to directories specified when starting the server
+- The MCP server ensures all paths are properly normalized and verified before access
+
+## Limitations
+
+- Some extraction features require additional libraries:
+  - PDF image detection requires PyMuPDF
+  - PDF table extraction requires tabula-py or pdfplumber
+  - EPUB support requires ebooklib and beautifulsoup4
+  - RTF support requires striprtf
+- File types not explicitly supported will be treated as plain text files when possible

@@ -211,3 +211,27 @@ Once the server is configured, Claude can access your files and directories. You
   - EPUB support requires ebooklib and beautifulsoup4
   - RTF support requires striprtf
 - File types not explicitly supported will be treated as plain text files when possible
+
+```json
+resources/
+├── core/                     # Core functionality and utilities
+│   ├── __init__.py          # Exports core features and flags
+│   ├── dependencies.py      # Manages all external package dependencies
+│   ├── extraction_options.py # File extraction configuration options
+│   └── file_utils.py        # Security and file handling utilities
+│
+├── readers/                  # File type-specific readers
+│   ├── __init__.py          # Exports all reader functions
+│   ├── pdf_reader.py        # PDF file extraction with layout preservation
+│   ├── office_readers.py    # Word, Excel, PowerPoint file readers
+│   ├── format_readers.py    # Various format readers
+│   ├── ebook_readers.py     # EPUB and ebook format readers
+│   ├── data_readers.py      # CSV and data file readers
+│   └── text_reader.py       # Plain text file reader
+│
+├── utils/                    # Utility functions
+│   └── formatters.py        # Text formatting and summarization
+│
+├── __init__.py              # Main package exports
+└── extractor.py             # High-level file extraction interface
+```

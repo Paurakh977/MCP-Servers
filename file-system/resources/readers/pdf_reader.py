@@ -1,41 +1,16 @@
-"""PDF file reader module."""
+"""PDF reader module with enhanced extraction capabilities."""
+
 import os
-
-# For PDF processing
-try:
-    import PyPDF2
-except ImportError:
-    print("PyPDF2 not installed. To read PDF files: pip install PyPDF2")
-
-# For enhanced PDF processing with better image detection
-try:
-    import fitz  # PyMuPDF
-    has_pymupdf = True
-except ImportError:
-    has_pymupdf = False
-    print("PyMuPDF not installed. For better PDF image detection: pip install pymupdf")
-
-# For PDF table extraction
-try:
-    import tabula
-    has_tabula = True
-except ImportError:
-    has_tabula = False
-    print("Tabula-py not installed. For better PDF table extraction: pip install tabula-py")
-
-# For PDF text extraction with layout preservation
-try:
-    import pdfplumber
-    has_pdfplumber = True
-except ImportError:
-    has_pdfplumber = False
-    print("pdfplumber not installed. For better PDF text extraction: pip install pdfplumber")
+from ..core.dependencies import (
+    has_pdfplumber, has_pymupdf, has_tabula,
+    PyPDF2, pdfplumber, fitz, tabula
+)
 
 def read_pdf_file(file_path: str) -> str:
     """Extract text and identify images from PDF files with layout preservation."""
     content = []
     
-    # Try pdfplumber first if available (better text layout preservation)
+    # Try pdfplumber first if available
     if has_pdfplumber:
         try:
             content.append("--- Document Metadata ---")

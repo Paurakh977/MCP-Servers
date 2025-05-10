@@ -1,5 +1,8 @@
 """Office document reader module for Word, Excel and PowerPoint files."""
 import os
+import json
+from datetime import datetime
+from typing import Dict, Any, List, Optional, Union
 
 # For image detection and properties
 try:
@@ -20,6 +23,7 @@ except ImportError:
 try:
     import openpyxl  # for .xlsx files
     from openpyxl.drawing.image import Image as XlsxImage
+    from openpyxl.utils import get_column_letter
 except ImportError:
     print("openpyxl not installed. To read Excel files: pip install openpyxl")
 
@@ -385,100 +389,129 @@ def read_docx_file(file_path: str) -> str:
     except Exception as e:
         return f"Error reading DOCX file: {str(e)}"
 
-def read_xlsx_file(file_path: str) -> str:
-    """Extract data from Microsoft Excel (.xlsx) files."""
+def read_xlsx_file(file_path: str, sheet_name: str = None, cell_range: str = None) -> str:
+    """Extract data from Microsoft Excel (.xlsx) files with optimized output.
+    
+    Args:
+        file_path: Path to the Excel file
+        sheet_name: Optional specific sheet to read. If None, returns file info only
+        cell_range: Optional cell range to read (e.g. 'A1:D10'). If None, reads all cells
+        
+    Returns:
+        JSON string containing file info and optionally sheet data
+    """
     try:
         workbook = openpyxl.load_workbook(file_path, data_only=True)
-        content = []
         
-        # Document properties
-        content.append("--- Excel Document Properties ---")
-        content.append(f"Filename: {os.path.basename(file_path)}")
-        content.append(f"Number of sheets: {len(workbook.sheetnames)}")
-        content.append(f"Sheet names: {', '.join(workbook.sheetnames)}")
-        content.append("-" * 40)
+        # Basic file info
+        file_info = {
+            "file": os.path.basename(file_path),
+            "sheets": []
+        }
         
-        # Process each sheet
-        for sheet_name in workbook.sheetnames:
-            sheet = workbook[sheet_name]
-            content.append(f"\n--- Sheet: {sheet_name} ---")
-            content.append(f"Dimensions: {sheet.dimensions}")
+        # Get info for all sheets
+        for ws in workbook.worksheets:
+            # Get sheet dimensions
+            min_col, min_row, max_col, max_row = openpyxl.utils.range_boundaries(ws.calculate_dimension())
             
-            # Count non-empty cells
-            non_empty = 0
-            for row in sheet.iter_rows():
-                for cell in row:
-                    if cell.value is not None:
-                        non_empty += 1
+            # Get column headers (first row)
+            columns = []
+            column_refs = []
+            for col in range(min_col, max_col + 1):
+                cell = ws.cell(min_row, col)
+                header = cell.value if cell.value is not None else f"Column {get_column_letter(col)}"
+                columns.append(header)
+                column_refs.append(get_column_letter(col))
             
-            content.append(f"Non-empty cells: {non_empty}")
-            
-            # Check for charts, images, etc.
-            if sheet._charts:
-                content.append(f"Charts: {len(sheet._charts)}")
-            
-            if sheet._images:
-                content.append(f"Images: {len(sheet._images)}")
-            
-            # Table data
-            content.append("\n--- Data ---")
-            
-            # Get maximum row and column indices
-            max_row = sheet.max_row
-            max_col = sheet.max_column
-            
-            # Avoid excessive output for very large sheets
-            display_rows = min(max_row, 100)  # Display up to 100 rows
-            display_cols = min(max_col, 20)   # Display up to 20 columns
-            
-            # Add truncation notice if needed
-            if display_rows < max_row or display_cols < max_col:
-                content.append(f"Note: Displaying {display_rows}x{display_cols} of {max_row}x{max_col} cells")
-            
-            # Calculate column widths
-            col_widths = []
-            for col_idx in range(1, display_cols + 1):
-                max_width = 0
-                for row_idx in range(1, display_rows + 1):
-                    cell = sheet.cell(row=row_idx, column=col_idx)
-                    if cell.value is not None:
-                        max_width = max(max_width, len(str(cell.value)))
-                col_widths.append(max(max_width, 3))  # Minimum 3 chars width
-            
-            # Generate header row (column labels)
-            header_row = []
-            for col_idx in range(1, display_cols + 1):
-                col_letter = openpyxl.utils.get_column_letter(col_idx)
-                header_row.append(col_letter.ljust(col_widths[col_idx-1]))
-            content.append("| " + " | ".join(header_row) + " |")
-            
-            # Generate separator
-            separator = []
-            for width in col_widths:
-                separator.append("-" * width)
-            content.append("| " + " | ".join(separator) + " |")
-            
-            # Generate data rows
-            for row_idx in range(1, display_rows + 1):
-                row_data = []
-                for col_idx in range(1, display_cols + 1):
-                    cell = sheet.cell(row=row_idx, column=col_idx)
-                    value = str(cell.value) if cell.value is not None else ""
-                    # Truncate long values
-                    if len(value) > 30:
-                        value = value[:27] + "..."
-                    row_data.append(value.ljust(col_widths[col_idx-1]))
-                content.append("| " + " | ".join(row_data) + " |")
-            
-            # If there are more rows/columns, indicate truncation
-            if max_row > display_rows:
-                content.append(f"... {max_row - display_rows} more rows ...")
-            if max_col > display_cols:
-                content.append(f"... {max_col - display_cols} more columns ...")
+            sheet_info = {
+                "name": ws.title,
+                "dimensions": ws.calculate_dimension(),
+                "row_count": ws.max_row,
+                "column_count": max_col - min_col + 1,
+                "columns": columns,
+                "column_refs": column_refs
+            }
+            file_info["sheets"].append(sheet_info)
         
-        return "\n".join(content)
+        # If no specific sheet requested, return file info only
+        if not sheet_name:
+            return json.dumps(file_info)
+        
+        # Validate requested sheet exists
+        if sheet_name not in workbook.sheetnames:
+            return json.dumps({
+                "error": f"Sheet '{sheet_name}' not found in workbook"
+            })
+        
+        # Get the requested sheet
+        sheet = workbook[sheet_name]
+        
+        # Parse cell range if provided
+        if cell_range:
+            try:
+                min_col, min_row, max_col, max_row = openpyxl.utils.range_boundaries(cell_range)
+            except ValueError:
+                return json.dumps({
+                    "error": f"Invalid cell range format: {cell_range}"
+                })
+        else:
+            # Use full sheet range
+            min_col, min_row, max_col, max_row = openpyxl.utils.range_boundaries(sheet.calculate_dimension())
+        
+        # Get column headers (first row)
+        columns = []
+        for col in range(min_col, max_col + 1):
+            cell = sheet.cell(min_row, col)
+            columns.append(cell.value if cell.value is not None else "")
+        
+        # Collect non-empty rows
+        records = []
+        for row in range(min_row + 1, max_row + 1):
+            values = []
+            row_has_data = False
+            
+            for col in range(min_col, max_col + 1):
+                cell = sheet.cell(row, col)
+                value = cell.value
+                
+                # Convert datetime objects to ISO format
+                if isinstance(value, datetime.datetime):
+                    value = value.isoformat()
+                
+                values.append(value)
+                if value is not None and value != "":
+                    row_has_data = True
+            
+            if row_has_data:
+                records.append({
+                    "row": row,
+                    "values": values
+                })
+        
+        # Count charts and images
+        chart_count = len([drawing for drawing in sheet._charts])
+        image_count = len([drawing for drawing in sheet._images])
+        
+        # Prepare sheet data
+        sheet_data = {
+            "sheet_name": sheet_name,
+            "dimensions": cell_range or sheet.calculate_dimension(),
+            "non_empty_cells": len(records),
+            "charts": chart_count,
+            "images": image_count,
+            "columns": columns,
+            "records": records
+        }
+        
+        # Add sheet data to response
+        file_info["sheet"] = [sheet_data]
+        
+        return json.dumps(file_info)
+        
     except Exception as e:
-        return f"Error reading Excel file: {str(e)}"
+        return json.dumps({
+            "error": f"Failed to read Excel file: {str(e)}"
+        })
 
 def read_pptx_file(file_path: str) -> str:
     """Extract text and identify objects from Microsoft PowerPoint (.pptx) files in sequential order."""

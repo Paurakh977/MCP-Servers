@@ -508,6 +508,7 @@ async def read_resource(uri: AnyUrl) -> str:
 async def get_prompt(
     name: str, arguments: dict[str, str] | None = None
 ) -> types.GetPromptResult:
+    print(f"PROMPT REQUESTED: {name} with arguments: {arguments}", file=sys.stderr)
     if name not in PROMPTS:
         raise ValueError(f"Prompt not found: {name}")
 
@@ -539,7 +540,15 @@ You are a File Assistant. Whenever the user asks to read or inspect a file by na
 
     elif name == "read-excel-as-table":
         system_msg += """\n
-        **FORMAT** the output as a **markdown table** (headers + rows). If the sheet is very wide, you may output valid CSV instead. If `summarize=true`, append a brief summary truncated to `max_length` *after* the table.
+        **IMPORTANT - YOU MUST FORMAT ALL OUTPUT AS A MARKDOWN TABLE**
+        You MUST format ALL excel/tabular data as a markdown table with headers and rows using | delimiters. 
+        Example format:
+        | Header1 | Header2 | Header3 |
+        |---------|---------|---------|
+        | Value1  | Value2  | Value3  |
+        
+        Only if the sheet is extremely wide (>10 columns), you may output valid CSV instead.
+        If `summarize=true`, append a brief summary truncated to `max_length` *after* the table.
         """
         filename   = arguments.get("filename", "")   if arguments else ""
         sheet_name = arguments.get("sheet_name", "") if arguments else ""

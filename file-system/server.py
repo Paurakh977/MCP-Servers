@@ -118,6 +118,7 @@ from resources import (
     get_file_info,
     get_resource_definitions,
     get_tool_definitions,
+    PROMPTS,
 )
 
 from resources.readers import (
@@ -153,6 +154,24 @@ async def list_resources() -> list[types.Resource]:
       5. directory:///path - List directory contents
     """
     return get_resource_definitions()
+
+
+@server.list_prompts()
+async def list_prompts() -> list[types.Prompt]:
+    """List all the available prompts for reading and writing files
+
+    Returns:
+        list[types.Prompt]: prompts' name, theor descriptions and arguments
+    """
+    return list(PROMPTS.values())
+
+
+@server.list_tools()
+async def list_tools() -> list[types.Tool]:
+    """
+    Returns a list of available tools for file operations.
+    """
+    return get_tool_definitions()
 
 
 @server.read_resource()
@@ -485,12 +504,78 @@ async def read_resource(uri: AnyUrl) -> str:
         return json.dumps({"error": f"Invalid URI or unexpected error: {str(e)}"})
 
 
-@server.list_tools()
-async def list_tools() -> list[types.Tool]:
-    """
-    Returns a list of available tools for file operations.
-    """
-    return get_tool_definitions()
+@server.get_prompt()
+async def get_prompt(
+    name: str, arguments: dict[str, str] | None = None
+) -> types.GetPromptResult:
+    if name not in PROMPTS:
+        raise ValueError(f"Prompt not found: {name}")
+
+    # Common system-level instructions
+    system_msg = """
+You are a File Assistant. Whenever the user asks to read or inspect a file by name:
+1. Retrieve the list of allowed directories by calling `list_allowed_directories`.
+2. Recursively search each allowed directory (including subdirectories) for the best match to the requested filename or pattern.
+3. If multiple candidates are found, ask the user to disambiguate.
+4. Use the appropriate tool to read or inspect the file:
+   - Use `read_file` or `read_excel_sheet` or whatever tool is best as per the context for reading content.
+   - Use `get_excel_info` or `get_file_info` or whatever tool is best as per the context for metadata.
+5. If summarization is requested, truncate or summarize to the specified `max_length`.
+6. Always handle typos or partial names by finding the closest match.
+7.**Critically**, format the result as a **markdown table** (with headers and rows) or valid CSV if large—never as prose.
+8. If summarization is requested, truncate to the given character/token limit *after* tabular output.
+"""
+
+    # Dispatch per prompt
+    if name == "find-and-read-file":
+        filename = arguments.get("filename", "") if arguments else ""
+        summarize = arguments.get("summarize", "false") if arguments else "false"
+        max_length = arguments.get("max_length", "500") if arguments else "500"
+
+        user_msg = (
+            f"Find the file named or matching pattern `{filename}` and read its content. "
+            f"Summarize: {summarize}. Max length: {max_length}."
+        )
+
+    elif name == "read-excel-as-table":
+        system_msg += """\n
+        **FORMAT** the output as a **markdown table** (headers + rows). If the sheet is very wide, you may output valid CSV instead. If `summarize=true`, append a brief summary truncated to `max_length` *after* the table.
+        """
+        filename   = arguments.get("filename", "")   if arguments else ""
+        sheet_name = arguments.get("sheet_name", "") if arguments else ""
+        summarize  = arguments.get("summarize", "false") if arguments else "false"
+        max_length = arguments.get("max_length", "reuturn full content ")    if arguments else "reuturn full content "
+        
+        user_msg = (
+        f"Read the Excel/CSV file named \"{filename}\""
+        + (f", sheet \"{sheet_name}\"" if sheet_name else "")
+        + f" and display it as a markdown table. Summarize: {summarize}. Max length: {max_length}."
+    )
+    
+    elif name == "find-files":
+        pattern = arguments.get("pattern", "") if arguments else ""
+        user_msg = f"Search for all files matching the pattern `{pattern}`."
+
+    elif name == "find-file-info":
+        filename = arguments.get("filename", "") if arguments else ""
+        user_msg = f"Get detailed metadata and supported extraction capabilities for the file `{filename}`."
+
+    else:
+        # Should never happen
+        raise ValueError("Prompt implementation not found")
+
+    return types.GetPromptResult(
+        messages=[
+            types.PromptMessage(
+                role="assistant",
+                content=types.TextContent(type="text", text=system_msg.strip()),
+            ),
+            types.PromptMessage(
+                role="user",
+                content=types.TextContent(type="text", text=user_msg.strip()),
+            ),
+        ]
+    )
 
 
 @server.call_tool()

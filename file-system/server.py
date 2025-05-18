@@ -133,6 +133,23 @@ from resources.readers import (
 )
 from resources.utils.formatters import summarize_content
 
+# Import Excel tools
+from resources.excel_tools import (
+    create_excel_workbook,
+    get_workbook_metadata,
+    create_worksheet,
+    copy_worksheet,
+    delete_worksheet,
+    rename_worksheet,
+    copy_excel_range,
+    delete_excel_range,
+    merge_excel_cells,
+    unmerge_excel_cells,
+    write_excel_data,
+    format_excel_range,
+    adjust_column_widths,
+)
+
 # Initialize allowed directories list - will be populated with command-line arguments
 allowed_directories = [os.getcwd()]  # Default to current directory
 
@@ -302,7 +319,7 @@ async def read_resource(uri: AnyUrl) -> str:
                 return json.dumps({"error": f"Failed to process Excel info: {str(e)}"})
 
         # Parse excel-sheet:/// URI
-        elif s.startswith("excel-sheet:///"):
+        elif s.startswith("excel-sheet:///") :
             try:
                 uri_path = s[len("excel-sheet:///") :]
 
@@ -1027,6 +1044,510 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                     text=f"Allowed directories:\n{json.dumps(allowed_directories, indent=2)}",
                 )
             ]
+
+        # Excel Workbook Operations
+        elif tool_name == "create_excel_workbook":
+            path = arguments["path"]
+            sheet_name = arguments.get("sheet_name", "Sheet1")
+            
+            # For new file creation, we need to check if the parent directory exists and is within allowed dirs
+            parent_dir = os.path.dirname(os.path.abspath(path))
+            
+            # Create parent directories if they don't exist, but only if within allowed dirs
+            is_path_allowed = False
+            for base_dir in allowed_directories:
+                # Check if parent_dir is within this allowed directory
+                try:
+                    rel_path = os.path.relpath(parent_dir, base_dir)
+                    # If the relative path starts with '..' it means it's outside the base_dir
+                    if not rel_path.startswith('..'):
+                        is_path_allowed = True
+                        break
+                except ValueError:
+                    # This happens on Windows if paths are on different drives
+                    continue
+            
+            if not is_path_allowed:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: Path not within any allowed directory"
+                    )
+                ]
+                
+            # Ensure the parent directory exists
+            os.makedirs(parent_dir, exist_ok=True)
+                
+            # Create workbook
+            result = create_excel_workbook(path, sheet_name)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "get_workbook_metadata":
+            path = arguments["path"]
+            include_ranges = arguments.get("include_ranges", False)
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Get workbook metadata
+            result = get_workbook_metadata(path, include_ranges)
+            
+            if result["success"]:
+                formatted_result = f"Excel Workbook: {result['filename']}\n"
+                formatted_result += f"Size: {result['file_size_human']}\n"
+                formatted_result += f"Modified: {result['modified_date']}\n"
+                formatted_result += f"Sheets: {result['sheets_count']}\n\n"
+                
+                # Add sheet information
+                for sheet in result["sheets"]:
+                    formatted_result += f"Sheet: {sheet['name']}\n"
+                    formatted_result += f"  Rows: {sheet['rows']}\n"
+                    formatted_result += f"  Columns: {sheet['columns']}\n"
+                    
+                    if include_ranges and sheet.get("used_range"):
+                        formatted_result += f"  Used Range: {sheet['used_range']}\n"
+                        
+                    if sheet.get("headers"):
+                        formatted_result += f"  Headers: {', '.join(sheet['headers'])}\n"
+                        
+                    formatted_result += "\n"
+                
+                return [types.TextContent(type="text", text=formatted_result)]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        # Excel Worksheet Operations
+        elif tool_name == "create_worksheet":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Create worksheet
+            result = create_worksheet(path, sheet_name)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "copy_worksheet":
+            path = arguments["path"]
+            source_sheet = arguments["source_sheet"]
+            target_sheet = arguments["target_sheet"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Copy worksheet
+            result = copy_worksheet(path, source_sheet, target_sheet)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "delete_worksheet":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Delete worksheet
+            result = delete_worksheet(path, sheet_name)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "rename_worksheet":
+            path = arguments["path"]
+            old_name = arguments["old_name"]
+            new_name = arguments["new_name"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Rename worksheet
+            result = rename_worksheet(path, old_name, new_name)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        # Excel Range Operations
+        elif tool_name == "copy_excel_range":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            source_range = arguments["source_range"]
+            target_start = arguments["target_start"]
+            target_sheet = arguments.get("target_sheet")
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Copy range
+            result = copy_excel_range(path, sheet_name, source_range, target_start, target_sheet)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "delete_excel_range":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            start_cell = arguments["start_cell"]
+            end_cell = arguments.get("end_cell")
+            shift_direction = arguments.get("shift_direction", "up")
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Delete range
+            result = delete_excel_range(path, sheet_name, start_cell, end_cell, shift_direction)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "merge_excel_cells":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            start_cell = arguments["start_cell"]
+            end_cell = arguments["end_cell"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Merge cells
+            result = merge_excel_cells(path, sheet_name, start_cell, end_cell)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "unmerge_excel_cells":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            start_cell = arguments["start_cell"]
+            end_cell = arguments["end_cell"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Unmerge cells
+            result = unmerge_excel_cells(path, sheet_name, start_cell, end_cell)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        # Excel Data Operations
+        elif tool_name == "write_excel_data":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            data = arguments["data"]
+            start_cell = arguments.get("start_cell", "A1")
+            headers = arguments.get("headers", True)
+            auto_adjust_width = arguments.get("auto_adjust_width", False)
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Write data
+            result = write_excel_data(path, sheet_name, data, start_cell, headers, auto_adjust_width)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+                
+        elif tool_name == "format_excel_range":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            start_cell = arguments["start_cell"]
+            end_cell = arguments.get("end_cell")
+            bold = arguments.get("bold", False)
+            italic = arguments.get("italic", False)
+            font_size = arguments.get("font_size")
+            font_color = arguments.get("font_color")
+            bg_color = arguments.get("bg_color")
+            alignment = arguments.get("alignment")
+            wrap_text = arguments.get("wrap_text", False)
+            border_style = arguments.get("border_style")
+            auto_adjust_width = arguments.get("auto_adjust_width", False)
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Apply formatting
+            result = format_excel_range(
+                path, sheet_name, start_cell, end_cell,
+                bold, italic, font_size, font_color, bg_color, 
+                alignment, wrap_text, border_style, auto_adjust_width
+            )
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        elif tool_name == "adjust_column_widths":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            column_range = arguments.get("column_range")
+            auto_fit = arguments.get("auto_fit", True)
+            custom_widths = arguments.get("custom_widths")
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Adjust column widths
+            result = adjust_column_widths(path, sheet_name, column_range, auto_fit, custom_widths)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
 
         # Unknown tool
         return [types.TextContent(type="text", text=f"Unknown tool: {tool_name}")]

@@ -508,6 +508,12 @@ async def read_resource(uri: AnyUrl) -> str:
 async def get_prompt(
     name: str, arguments: dict[str, str] | None = None
 ) -> types.GetPromptResult:
+    """
+    call the prompt by name with arguments
+    Args:
+        name (str): The name of the prompt to call.
+        arguments (dict[str, str], optional): The arguments to pass to the prompt. Defaults to None.
+    """
     print(f"PROMPT REQUESTED: {name} with arguments: {arguments}", file=sys.stderr)
     if name not in PROMPTS:
         raise ValueError(f"Prompt not found: {name}")

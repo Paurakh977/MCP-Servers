@@ -148,6 +148,8 @@ from resources.excel_tools import (
     write_excel_data,
     format_excel_range,
     adjust_column_widths,
+    apply_excel_formula,
+    apply_excel_formula_range,
 )
 
 # Initialize allowed directories list - will be populated with command-line arguments
@@ -1544,6 +1546,79 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             # Adjust column widths
             result = adjust_column_widths(path, sheet_name, column_range, auto_fit, custom_widths)
             
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        elif tool_name == "apply_excel_formula":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            cell = arguments["cell"]
+            formula = arguments["formula"]
+
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+
+            # Apply formula
+            result = apply_excel_formula(path, sheet_name, cell, formula)
+
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        elif tool_name == "apply_excel_formula_range":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            start_cell = arguments["start_cell"]
+            end_cell = arguments["end_cell"]
+            formula_template = arguments["formula_template"]
+
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+
+            # Apply formula to range
+            result = apply_excel_formula_range(path, sheet_name, start_cell, end_cell, formula_template)
+
             if result["success"]:
                 return [types.TextContent(type="text", text=result["message"])]
             else:

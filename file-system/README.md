@@ -235,3 +235,10 @@ resources/
 ├── __init__.py              # Main package exports
 └── extractor.py             # High-level file extraction interface
 ```
+
+test 
+"Create formulas to calculate the average, maximum, and minimum scores in the student sheet"
+"Apply conditional formatting to highlight students with scores above 90"
+"Create a formula that concatenates student names with their grades and sections"
+"Calculate the percentage of students in each grade level"
+"Apply VLOOKUP to connect student and teacher data based on subject names"

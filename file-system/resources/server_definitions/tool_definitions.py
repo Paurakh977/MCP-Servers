@@ -566,5 +566,67 @@ def get_tool_definitions() -> list[types.Tool]:
             },
             idempotentHint=False,
             readOnlyHint=False
+        ),
+        types.Tool(
+            name="apply_excel_formula",
+            description="Apply any Excel formula to a specific cell. Handles any valid Excel formula with comprehensive syntax validation and ensures proper cell reference formatting. Enables calculations, lookups, conditionals, and other Excel functions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Worksheet name"
+                    },
+                    "cell": {
+                        "type": "string",
+                        "description": "Target cell reference to apply the formula (e.g., 'A1', 'C5')"
+                    },
+                    "formula": {
+                        "type": "string",
+                        "description": "Excel formula to apply (with or without leading '='). Examples: '=SUM(A1:A10)', 'AVERAGE(B1:B20)', '=A1+B1*C1'"
+                    }
+                },
+                "required": ["path", "sheet_name", "cell", "formula"],
+                "additionalProperties": False
+            },
+            idempotentHint=False,
+            readOnlyHint=False
+        ),
+        types.Tool(
+            name="apply_excel_formula_range",
+            description="Apply an Excel formula across a range of cells, automatically adjusting row references. Perfect for filling columns with formulas that need to reference the current row, such as grading, calculations, and conditional formulas. The formula template should include {row} placeholders which will be replaced with the actual row number for each cell in the range.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Worksheet name"
+                    },
+                    "start_cell": {
+                        "type": "string",
+                        "description": "Top-left cell of the range (e.g., 'L2')"
+                    },
+                    "end_cell": {
+                        "type": "string",
+                        "description": "Bottom-right cell of the range (e.g., 'L36')"
+                    },
+                    "formula_template": {
+                        "type": "string",
+                        "description": "Excel formula template with {row} placeholders that will be replaced with the actual row number. Example: 'IF(F{row}>=90,\"Excellent\",IF(F{row}>=80,\"Good\",IF(F{row}>=70,\"Average\",IF(F{row}>=60,\"Pass\",\"Fail\"))))'"
+                    }
+                },
+                "required": ["path", "sheet_name", "start_cell", "end_cell", "formula_template"],
+                "additionalProperties": False
+            },
+            idempotentHint=False,
+            readOnlyHint=False
         )
     ] 

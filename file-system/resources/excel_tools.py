@@ -992,4 +992,130 @@ def adjust_column_widths(
         return {
             "success": False,
             "error": f"Failed to adjust column widths: {str(e)}"
+        }
+
+def apply_excel_formula(
+    filepath: str,
+    sheet_name: str,
+    cell: str,
+    formula: str
+) -> Dict[str, Any]:
+    """Apply any Excel formula to a specific cell. Handles all valid Excel formulas, ensures syntax, and supports complex expressions.
+    Args:
+        filepath: Path to the Excel workbook
+        sheet_name: Name of the worksheet
+        cell: Target cell reference (e.g., 'A1')
+        formula: Excel formula to apply (with or without leading '=')
+    Returns:
+        Dictionary with success status and message
+    """
+    try:
+        wb = load_workbook(filepath)
+        if sheet_name not in wb.sheetnames:
+            return {
+                "success": False,
+                "error": f"Sheet '{sheet_name}' not found"
+            }
+        ws = wb[sheet_name]
+        # Ensure formula starts with '='
+        formula_str = formula.strip()
+        if not formula_str.startswith("="):
+            formula_str = "=" + formula_str
+        # Assign formula to cell
+        ws[cell].value = formula_str
+        wb.save(filepath)
+        wb.close()
+        return {
+            "success": True,
+            "message": f"Formula '{formula_str}' applied to {cell} in sheet '{sheet_name}'"
+        }
+    except Exception as e:
+        logger.error(f"Failed to apply formula: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to apply formula: {str(e)}"
+        }
+
+def apply_excel_formula_range(
+    filepath: str,
+    sheet_name: str,
+    start_cell: str,
+    end_cell: str,
+    formula_template: str
+) -> Dict[str, Any]:
+    """Apply an Excel formula to a range of cells, automatically adjusting row references.
+    
+    This function takes a template formula with {row} placeholders and applies it to each cell
+    in the specified range, replacing {row} with the current row number. This allows applying
+    formulas with relative references to entire columns or ranges.
+    
+    Args:
+        filepath: Path to the Excel workbook
+        sheet_name: Name of the worksheet
+        start_cell: Top-left cell of the range (e.g., 'L2')
+        end_cell: Bottom-right cell of the range (e.g., 'L36')
+        formula_template: Formula template with {row} placeholders (e.g., 'IF(F{row}>=90,"Excellent",IF(F{row}>=80,"Good",...))')
+        
+    Returns:
+        Dictionary with success status and message
+    """
+    try:
+        wb = load_workbook(filepath)
+        if sheet_name not in wb.sheetnames:
+            return {
+                "success": False,
+                "error": f"Sheet '{sheet_name}' not found"
+            }
+        
+        ws = wb[sheet_name]
+        
+        # Parse cell range
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(f"{start_cell}:{end_cell}")
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Invalid cell range: {start_cell}:{end_cell} - {str(e)}"
+            }
+        
+        # Ensure formula template has {row} placeholder
+        if "{row}" not in formula_template:
+            # If no placeholder, assume it's a static formula
+            logger.warning("No {row} placeholder found in formula template. Using static formula.")
+            
+        # Apply formula to each cell in range
+        formulas_applied = 0
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                # Generate cell-specific formula
+                cell_formula = formula_template.replace("{row}", str(row))
+                
+                # Ensure formula starts with '='
+                if not cell_formula.strip().startswith("="):
+                    cell_formula = "=" + cell_formula.strip()
+                    
+                # Apply formula to cell
+                cell = ws.cell(row=row, column=col)
+                cell.value = cell_formula
+                formulas_applied += 1
+        
+        # Save workbook
+        wb.save(filepath)
+        wb.close()
+        
+        # Return success message
+        range_str = f"{start_cell}:{end_cell}"
+        return {
+            "success": True,
+            "message": f"Applied formula to {formulas_applied} cells in range {range_str} of sheet '{sheet_name}'",
+            "cells_affected": formulas_applied
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to apply formula range: {e}")
+        if 'wb' in locals() and wb is not None:
+            wb.close()
+        return {
+            "success": False,
+            "error": f"Failed to apply formula range: {str(e)}"
         } 

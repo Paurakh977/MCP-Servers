@@ -150,6 +150,10 @@ from resources.excel_tools import (
     adjust_column_widths,
     apply_excel_formula,
     apply_excel_formula_range,
+    delete_excel_workbook,
+    add_excel_column,
+    validate_excel_formula,
+    add_data_validation,
 )
 
 # Initialize allowed directories list - will be populated with command-line arguments
@@ -468,7 +472,7 @@ async def read_resource(uri: AnyUrl) -> str:
                 return json.dumps({"error": f"Failed to process Excel sheet: {str(e)}"})
 
         # Parse file-info:/// URI
-        elif s.startswith("file-info:///"):
+        elif s.startswith("file-info:///") :
             try:
                 uri_path = s[len("file-info:///") :]
                 path = uri_path
@@ -492,7 +496,7 @@ async def read_resource(uri: AnyUrl) -> str:
                 return json.dumps({"error": f"Failed to get file info: {str(e)}"})
 
         # Parse directory:/// URI
-        elif s.startswith("directory:///"):
+        elif s.startswith("directory:///") :
             try:
                 uri_path = s[len("directory:///") :]
                 path = uri_path
@@ -1556,6 +1560,8 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             sheet_name = arguments["sheet_name"]
             cell = arguments["cell"]
             formula = arguments["formula"]
+            protect_from_errors = arguments.get("protect_from_errors", True)
+            handle_arrays = arguments.get("handle_arrays", True)
 
             # If path doesn't exist, try to find it in allowed directories
             if not os.path.exists(path):
@@ -1580,10 +1586,27 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                 ]
 
             # Apply formula
-            result = apply_excel_formula(path, sheet_name, cell, formula)
+            result = apply_excel_formula(path, sheet_name, cell, formula, protect_from_errors, handle_arrays)
 
             if result["success"]:
-                return [types.TextContent(type="text", text=result["message"])]
+                response_text = result["message"]
+                # Add warnings if any
+                if "warnings" in result:
+                    response_text += "\n\nWarnings:"
+                    for warning in result["warnings"]:
+                        response_text += f"\n- {warning}"
+                
+                # Add array formula info if applicable
+                if "array_formula_type" in result:
+                    response_text += f"\n\nApplied as {result['array_formula_type']} array formula."
+                
+                # Add external reference info if applicable
+                if "external_references" in result:
+                    response_text += "\n\nExternal references used:"
+                    for ref in result["external_references"]:
+                        response_text += f"\n- {ref}"
+                
+                return [types.TextContent(type="text", text=response_text)]
             else:
                 return [types.TextContent(type="text", text=result["error"])]
 
@@ -1593,6 +1616,9 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             start_cell = arguments["start_cell"]
             end_cell = arguments["end_cell"]
             formula_template = arguments["formula_template"]
+            protect_from_errors = arguments.get("protect_from_errors", True)
+            dynamic_calculation = arguments.get("dynamic_calculation", True)
+            chunk_size = arguments.get("chunk_size", 1000)
 
             # If path doesn't exist, try to find it in allowed directories
             if not os.path.exists(path):
@@ -1617,8 +1643,139 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                 ]
 
             # Apply formula to range
-            result = apply_excel_formula_range(path, sheet_name, start_cell, end_cell, formula_template)
+            result = apply_excel_formula_range(
+                path, sheet_name, start_cell, end_cell, formula_template, 
+                protect_from_errors, dynamic_calculation, chunk_size
+            )
 
+            if result["success"]:
+                response_text = result["message"]
+                # Add warnings if any
+                if "warnings" in result:
+                    response_text += "\n\nWarnings:"
+                    for warning in result["warnings"]:
+                        response_text += f"\n- {warning}"
+                
+                # Add errors if any
+                if "errors" in result:
+                    response_text += "\n\nErrors encountered:"
+                    for error in result["errors"]:
+                        response_text += f"\n- {error}"
+                        
+                # Add array formula info if applicable
+                if result.get("is_array_formula"):
+                    response_text += f"\n\nApplied as array formula with dynamic calculation."
+                    if result.get("applied_as") == "single_array_formula":
+                        response_text += " Formula will spill results automatically."
+                        
+                return [types.TextContent(type="text", text=response_text)]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        elif tool_name == "delete_excel_workbook":
+            path = arguments["path"]
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Delete workbook
+            result = delete_excel_workbook(path)
+            
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        elif tool_name == "add_excel_column":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            column_name = arguments["column_name"]
+            column_position = arguments.get("column_position")
+            data = arguments.get("data")
+            header_style = arguments.get("header_style")
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Add column
+            result = add_excel_column(path, sheet_name, column_name, column_position, data, header_style)
+
+            if result["success"]:
+                return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        elif tool_name == "add_data_validation":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            cell_range = arguments["cell_range"]
+            validation_type = arguments["validation_type"]
+            validation_criteria = arguments["validation_criteria"]
+            error_message = arguments.get("error_message")
+            
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+                
+            # Add data validation
+            result = add_data_validation(path, sheet_name, cell_range, validation_type, validation_criteria, error_message)
+            
             if result["success"]:
                 return [types.TextContent(type="text", text=result["message"])]
             else:

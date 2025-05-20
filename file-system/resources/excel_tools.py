@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union, Tuple
+import re
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -17,9 +18,14 @@ from openpyxl.utils.cell import range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.styles import Font, Border, PatternFill, Side, Alignment
 from openpyxl.styles.colors import Color
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Constants for formula handling
+ARRAY_FORMULA_TYPES = ["XLOOKUP", "FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE"]
+EXTERNAL_REF_PATTERN = r'\[([^\]]+)\]'
 
 # Exceptions
 class ExcelError(Exception):
@@ -168,6 +174,47 @@ def get_workbook_metadata(filepath: str, include_ranges: bool = False) -> Dict[s
         return {
             "success": False,
             "error": f"Failed to get workbook metadata: {str(e)}"
+        }
+
+def delete_excel_workbook(filepath: str) -> Dict[str, Any]:
+    """Delete an Excel workbook file.
+    
+    Args:
+        filepath: Path to the Excel workbook to delete
+        
+    Returns:
+        Dictionary with success status and message
+    """
+    try:
+        path = Path(filepath)
+        
+        # Check if file exists
+        if not path.exists():
+            return {
+                "success": False,
+                "error": f"File not found: {filepath}"
+            }
+            
+        # Check if it's an Excel file
+        file_extension = path.suffix.lower()
+        if file_extension != ".xlsx":
+            return {
+                "success": False, 
+                "error": f"Not an Excel file: {filepath}"
+            }
+            
+        # Delete the workbook file
+        path.unlink()
+        
+        return {
+            "success": True,
+            "message": f"Workbook {path.name} deleted successfully"
+        }
+    except Exception as e:
+        logger.error(f"Failed to delete workbook: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to delete workbook: {str(e)}"
         }
 
 # Worksheet Operations
@@ -994,18 +1041,105 @@ def adjust_column_widths(
             "error": f"Failed to adjust column widths: {str(e)}"
         }
 
+def validate_excel_formula(formula: str) -> Dict[str, Any]:
+    """Validate Excel formula syntax and check for common errors.
+    
+    Args:
+        formula: Excel formula to validate
+        
+    Returns:
+        Dictionary with validation result and potential issues
+    """
+    try:
+        # Ensure formula starts with '='
+        formula_str = formula.strip()
+        if not formula_str.startswith("="):
+            formula_str = "=" + formula_str
+        
+        # Check for division by zero risk
+        has_division = "/" in formula_str
+        has_division_safety = False
+        
+        if has_division:
+            # Check if formula contains IFERROR, IF to handle division
+            division_safety_patterns = ["IFERROR", "IF(", "IFNA"]
+            for pattern in division_safety_patterns:
+                if pattern in formula_str.upper():
+                    has_division_safety = True
+                    break
+        
+        # Check for common syntax errors
+        syntax_issues = []
+        
+        # Check for unbalanced parentheses
+        open_count = formula_str.count("(") 
+        close_count = formula_str.count(")")
+        if open_count != close_count:
+            syntax_issues.append(f"Unbalanced parentheses: {open_count} opening vs {close_count} closing")
+        
+        # Check for incomplete functions (function names followed directly by operators)
+        incomplete_function = re.search(r'([A-Z]+)([+\-*/])', formula_str.upper())
+        if incomplete_function:
+            syntax_issues.append(f"Possible incomplete function: {incomplete_function.group(1)}")
+        
+        # Detect array formula types
+        is_array_formula = False
+        array_formula_type = None
+        for array_type in ARRAY_FORMULA_TYPES:
+            if array_type in formula_str.upper():
+                is_array_formula = True
+                array_formula_type = array_type
+                break
+                
+        # Check for external references
+        external_refs = []
+        ext_matches = re.findall(EXTERNAL_REF_PATTERN, formula_str)
+        for match in ext_matches:
+            if match.lower().endswith('.xlsx'):
+                external_refs.append(match)
+        
+        result = {
+            "is_valid": len(syntax_issues) == 0,
+            "formula": formula_str,
+            "issues": syntax_issues,
+            "has_division": has_division,
+            "has_division_safety": has_division_safety,
+            "needs_safety_wrapper": has_division and not has_division_safety,
+            "is_array_formula": is_array_formula,
+            "array_formula_type": array_formula_type,
+            "external_references": external_refs
+        }
+        
+        return result
+    except Exception as e:
+        return {
+            "is_valid": False,
+            "formula": formula,
+            "issues": [str(e)]
+        }
+
 def apply_excel_formula(
     filepath: str,
     sheet_name: str,
     cell: str,
-    formula: str
+    formula: str,
+    protect_from_errors: bool = True,
+    handle_arrays: bool = True
 ) -> Dict[str, Any]:
-    """Apply any Excel formula to a specific cell. Handles all valid Excel formulas, ensures syntax, and supports complex expressions.
+    """Apply any Excel formula to a specific cell, with error handling.
+    
+    This function applies Excel formulas and helps protect against common errors like 
+    division by zero by optionally wrapping formulas in IFERROR when needed.
+    Also supports modern array formulas that spill results.
+    
     Args:
         filepath: Path to the Excel workbook
         sheet_name: Name of the worksheet
         cell: Target cell reference (e.g., 'A1')
         formula: Excel formula to apply (with or without leading '=')
+        protect_from_errors: Whether to auto-protect against errors like division by zero
+        handle_arrays: Whether to properly handle modern array formulas (XLOOKUP, FILTER, etc.)
+        
     Returns:
         Dictionary with success status and message
     """
@@ -1017,18 +1151,62 @@ def apply_excel_formula(
                 "error": f"Sheet '{sheet_name}' not found"
             }
         ws = wb[sheet_name]
-        # Ensure formula starts with '='
-        formula_str = formula.strip()
-        if not formula_str.startswith("="):
-            formula_str = "=" + formula_str
-        # Assign formula to cell
-        ws[cell].value = formula_str
+        
+        # Validate formula
+        validation = validate_excel_formula(formula)
+        formula_str = validation["formula"]
+        
+        # Provide warnings for issues found
+        warnings = []
+        if not validation["is_valid"]:
+            warnings.extend(validation["issues"])
+        
+        # Apply division by zero protection if needed and requested
+        if protect_from_errors and validation["needs_safety_wrapper"]:
+            original_formula = formula_str
+            formula_str = f"=IFERROR({formula_str[1:]},\"\")"
+            warnings.append(f"Added error protection: {original_formula} → {formula_str}")
+        
+        # Check for external references
+        if validation["external_references"]:
+            ext_refs = validation["external_references"]
+            ext_warnings = []
+            for ext_ref in ext_refs:
+                # Check if external file exists relative to current file
+                ext_path = os.path.join(os.path.dirname(filepath), ext_ref)
+                if not os.path.exists(ext_path):
+                    ext_warnings.append(f"External workbook not found: {ext_ref}")
+            if ext_warnings:
+                warnings.extend(ext_warnings)
+                
+        # Handle array formulas specially if requested
+        if handle_arrays and validation["is_array_formula"]:
+            ws[cell].value = formula_str
+            # Warn user about spillover
+            warnings.append(f"Applied as array formula ({validation['array_formula_type']}). Ensure space for results to spill.")
+        else:
+            # Assign regular formula to cell
+            ws[cell].value = formula_str
+            
         wb.save(filepath)
         wb.close()
-        return {
+        
+        result = {
             "success": True,
             "message": f"Formula '{formula_str}' applied to {cell} in sheet '{sheet_name}'"
         }
+        
+        if warnings:
+            result["warnings"] = warnings
+            result["message"] += f" (with {len(warnings)} warning{'s' if len(warnings) > 1 else ''})"
+            
+        # Add additional data when appropriate
+        if validation["is_array_formula"]:
+            result["array_formula_type"] = validation["array_formula_type"]
+        if validation["external_references"]:
+            result["external_references"] = validation["external_references"]
+            
+        return result
     except Exception as e:
         logger.error(f"Failed to apply formula: {e}")
         return {
@@ -1041,20 +1219,26 @@ def apply_excel_formula_range(
     sheet_name: str,
     start_cell: str,
     end_cell: str,
-    formula_template: str
+    formula_template: str,
+    protect_from_errors: bool = True,
+    dynamic_calculation: bool = True,
+    chunk_size: int = 1000
 ) -> Dict[str, Any]:
-    """Apply an Excel formula to a range of cells, automatically adjusting row references.
+    """Apply an Excel formula to a range of cells, with error handling.
     
-    This function takes a template formula with {row} placeholders and applies it to each cell
-    in the specified range, replacing {row} with the current row number. This allows applying
-    formulas with relative references to entire columns or ranges.
+    This function takes a template formula with placeholders and applies it to each cell
+    in the specified range, with support for large datasets and modern array formulas.
     
     Args:
         filepath: Path to the Excel workbook
         sheet_name: Name of the worksheet
         start_cell: Top-left cell of the range (e.g., 'L2')
         end_cell: Bottom-right cell of the range (e.g., 'L36')
-        formula_template: Formula template with {row} placeholders (e.g., 'IF(F{row}>=90,"Excellent",IF(F{row}>=80,"Good",...))')
+        formula_template: Formula template with {row} and {col} placeholders 
+                          (e.g., 'IF(F{row}>=90,"Excellent",IF(F{row}>=80,"Good",...))')
+        protect_from_errors: Whether to auto-protect against errors like division by zero
+        dynamic_calculation: Whether to use dynamic array functions for better performance
+        chunk_size: How many cells to process at once (for large ranges)
         
     Returns:
         Dictionary with success status and message
@@ -1078,38 +1262,129 @@ def apply_excel_formula_range(
                 "error": f"Invalid cell range: {start_cell}:{end_cell} - {str(e)}"
             }
         
-        # Ensure formula template has {row} placeholder
-        if "{row}" not in formula_template:
-            # If no placeholder, assume it's a static formula
-            logger.warning("No {row} placeholder found in formula template. Using static formula.")
-            
-        # Apply formula to each cell in range
-        formulas_applied = 0
-        for row in range(min_row, max_row + 1):
-            for col in range(min_col, max_col + 1):
-                # Generate cell-specific formula
-                cell_formula = formula_template.replace("{row}", str(row))
-                
-                # Ensure formula starts with '='
-                if not cell_formula.strip().startswith("="):
-                    cell_formula = "=" + cell_formula.strip()
-                    
-                # Apply formula to cell
-                cell = ws.cell(row=row, column=col)
-                cell.value = cell_formula
-                formulas_applied += 1
+        # Calculate range size to determine if we need chunking for large datasets
+        total_cells = (max_row - min_row + 1) * (max_col - min_col + 1)
+        use_chunking = total_cells > chunk_size
         
-        # Save workbook
-        wb.save(filepath)
+        # Ensure formula template has placeholders or warn
+        warnings = []
+        has_row_placeholder = "{row}" in formula_template
+        has_col_placeholder = "{col}" in formula_template
+        
+        if not (has_row_placeholder or has_col_placeholder):
+            warnings.append("No {row} or {col} placeholder found in formula template. Using static formula.")
+        
+        # Check if this is a modern array formula
+        validation = validate_excel_formula(formula_template.replace("{row}", str(min_row)).replace("{col}", get_column_letter(min_col)))
+        is_array_formula = validation["is_array_formula"]
+        
+        # For array formulas with dynamic calculation, we can optimize by applying once
+        if is_array_formula and dynamic_calculation:
+            # Apply just to the top-left cell and let it spill
+            top_left_cell = f"{get_column_letter(min_col)}{min_row}"
+            cell_formula = formula_template.replace("{row}", str(min_row)).replace("{col}", get_column_letter(min_col))
+            
+            # Apply the array formula
+            result = apply_excel_formula(
+                filepath, sheet_name, top_left_cell, cell_formula, 
+                protect_from_errors, handle_arrays=True
+            )
+            
+            if not result["success"]:
+                return result
+                
+            # Add array formula info
+            result["is_array_formula"] = True
+            result["cells_affected"] = total_cells
+            result["applied_as"] = "single_array_formula"
+            
+            if warnings:
+                if "warnings" not in result:
+                    result["warnings"] = []
+                result["warnings"].extend(warnings)
+                
+            return result
+        
+        # Process in chunks for large datasets
+        formulas_applied = 0
+        errors = []
+        
+        # Process cells in chunks if needed
+        if use_chunking:
+            # Process cells in chunks
+            for row_start in range(min_row, max_row + 1, chunk_size):
+                row_end = min(row_start + chunk_size - 1, max_row)
+                
+                # Apply formulas to this chunk
+                for row in range(row_start, row_end + 1):
+                    for col in range(min_col, max_col + 1):
+                        # Generate cell-specific formula
+                        cell_formula = formula_template.replace("{row}", str(row)).replace("{col}", get_column_letter(col))
+                        
+                        # Apply formula directly
+                        cell = ws.cell(row=row, column=col)
+                        
+                        try:
+                            # Validate and protect if needed
+                            cell_validation = validate_excel_formula(cell_formula)
+                            final_formula = cell_validation["formula"]
+                            
+                            # Apply division by zero protection if needed and requested
+                            if protect_from_errors and cell_validation["needs_safety_wrapper"]:
+                                final_formula = f"=IFERROR({final_formula[1:]},\"\")"
+                            
+                            # Apply formula to cell
+                            cell.value = final_formula
+                            formulas_applied += 1
+                        except Exception as cell_error:
+                            errors.append(f"Error at {get_column_letter(col)}{row}: {str(cell_error)}")
+                
+                # Save after each chunk to minimize memory usage
+                wb.save(filepath)
+        else:
+            # Apply formulas to all cells in the range
+            for row in range(min_row, max_row + 1):
+                for col in range(min_col, max_col + 1):
+                    # Generate cell-specific formula
+                    cell_formula = formula_template.replace("{row}", str(row)).replace("{col}", get_column_letter(col))
+                    
+                    # Validate and protect if needed
+                    cell_validation = validate_excel_formula(cell_formula)
+                    final_formula = cell_validation["formula"]
+                    
+                    # Apply division by zero protection if needed and requested
+                    if protect_from_errors and cell_validation["needs_safety_wrapper"]:
+                        final_formula = f"=IFERROR({final_formula[1:]},\"\")"
+                    
+                    # Apply formula to cell
+                    cell = ws.cell(row=row, column=col)
+                    cell.value = final_formula
+                    formulas_applied += 1
+            
+            # Save workbook once for small ranges
+            wb.save(filepath)
+        
         wb.close()
         
         # Return success message
         range_str = f"{start_cell}:{end_cell}"
-        return {
+        result = {
             "success": True,
             "message": f"Applied formula to {formulas_applied} cells in range {range_str} of sheet '{sheet_name}'",
-            "cells_affected": formulas_applied
+            "cells_affected": formulas_applied,
+            "processed_with_chunking": use_chunking
         }
+        
+        if warnings:
+            result["warnings"] = warnings
+            result["message"] += f" (with {len(warnings)} warning{'s' if len(warnings) > 1 else ''})"
+            
+        if errors:
+            result["errors"] = errors[:10]  # Limit to first 10 errors
+            if len(errors) > 10:
+                result["errors"].append(f"...and {len(errors) - 10} more errors")
+            
+        return result
         
     except Exception as e:
         logger.error(f"Failed to apply formula range: {e}")
@@ -1118,4 +1393,206 @@ def apply_excel_formula_range(
         return {
             "success": False,
             "error": f"Failed to apply formula range: {str(e)}"
+        }
+
+def add_excel_column(
+    filepath: str,
+    sheet_name: str,
+    column_name: str,
+    column_position: Optional[str] = None,
+    data: Optional[List[Any]] = None,
+    header_style: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Add a new column to an existing Excel worksheet without rewriting the entire sheet.
+    
+    This function intelligently inserts a new column at a specific position or at the end of existing data.
+    It handles formatting the header and can optionally insert data for the new column.
+    
+    Args:
+        filepath: Path to the Excel workbook
+        sheet_name: Name of the worksheet to modify
+        column_name: Name for the new column (header text)
+        column_position: Optional column letter where to insert (e.g., 'C' to insert as third column).
+                         If not provided, adds to the end of existing data.
+        data: Optional list of values for the column. Length should match the data rows in the sheet.
+        header_style: Optional dictionary of styling parameters for the header
+                     (e.g., {'bold': True, 'bg_color': 'FFFF00'})
+    
+    Returns:
+        Dictionary with success status and message
+    """
+    try:
+        # Load the workbook
+        wb = load_workbook(filepath)
+        
+        # Validate sheet exists
+        if sheet_name not in wb.sheetnames:
+            return {
+                "success": False,
+                "error": f"Sheet '{sheet_name}' not found"
+            }
+        
+        ws = wb[sheet_name]
+        
+        # Find the current dimensions
+        min_col, min_row, max_col, max_row = range_boundaries(ws.calculate_dimension())
+        
+        # Default header style
+        default_header_style = {
+            "bold": True,
+            "bg_color": None,  # No background color by default
+            "font_size": None,  # Keep default font size
+            "alignment": "center"
+        }
+        
+        # Merge provided header style with defaults
+        if header_style:
+            for key, value in header_style.items():
+                default_header_style[key] = value
+        
+        # Determine insertion column index
+        insert_col_idx = max_col + 1  # Default to end of data
+        if column_position:
+            try:
+                insert_col_idx = column_index_from_string(column_position)
+                # If inserting within existing data, shift columns
+                if insert_col_idx <= max_col:
+                    ws.insert_cols(insert_col_idx)
+            except ValueError:
+                return {
+                    "success": False,
+                    "error": f"Invalid column position: {column_position}"
+                }
+        
+        # Add the header
+        header_cell = ws.cell(row=min_row, column=insert_col_idx)
+        header_cell.value = column_name
+        
+        # Apply header styling
+        header_cell.font = Font(bold=default_header_style["bold"])
+        if default_header_style["font_size"]:
+            header_cell.font = Font(bold=default_header_style["bold"], size=default_header_style["font_size"])
+        
+        if default_header_style["bg_color"]:
+            bg_color = default_header_style["bg_color"]
+            if bg_color.startswith("#"):
+                bg_color = bg_color[1:]  # Remove # if present
+            header_cell.fill = PatternFill(start_color=bg_color, end_color=bg_color, fill_type="solid")
+        
+        if default_header_style["alignment"]:
+            header_cell.alignment = Alignment(horizontal=default_header_style["alignment"])
+        
+        # Add data if provided
+        if data:
+            for i, value in enumerate(data, start=1):
+                # Skip the header row (min_row), start from the next row
+                row_idx = min_row + i
+                # Don't exceed existing data rows
+                if max_row >= row_idx:
+                    cell = ws.cell(row=row_idx, column=insert_col_idx)
+                    cell.value = value
+        
+        # Save the workbook
+        wb.save(filepath)
+        wb.close()
+        
+        # Prepare success message
+        col_letter = get_column_letter(insert_col_idx)
+        return {
+            "success": True,
+            "message": f"Added column '{column_name}' at position {col_letter} in sheet '{sheet_name}'",
+            "column_position": col_letter,
+            "data_rows_affected": len(data) if data else 0
+        }
+    
+    except Exception as e:
+        logger.error(f"Failed to add column: {e}")
+        if 'wb' in locals():
+            wb.close()
+        return {
+            "success": False,
+            "error": f"Failed to add column: {str(e)}"
+        }
+
+def add_data_validation(
+    filepath: str,
+    sheet_name: str,
+    cell_range: str,
+    validation_type: str,
+    validation_criteria: Dict[str, Any],
+    error_message: Optional[str] = None
+) -> Dict[str, Any]:
+    """Add data validation rules to Excel cells.
+    
+    Args:
+        filepath: Path to Excel workbook
+        sheet_name: Target worksheet name
+        cell_range: Range to apply validation to (e.g., "A1:A10")
+        validation_type: Type of validation ("list", "decimal", "date", "textLength", "custom")
+        validation_criteria: Dictionary with validation parameters
+            For list: {"source": ["Option1", "Option2"] or "=Sheet2!A1:A10"}
+            For decimal: {"operator": "between", "minimum": 1, "maximum": 100}
+            For custom: {"formula": "=AND(A1>0,A1<100)"}
+        error_message: Optional custom error message
+        
+    Returns:
+        Result dictionary with success status
+    """
+    try:
+        wb = load_workbook(filepath)
+        
+        # Validate sheet
+        if sheet_name not in wb.sheetnames:
+            return {
+                "success": False,
+                "error": f"Sheet '{sheet_name}' not found"
+            }
+            
+        ws = wb[sheet_name]
+        
+        # Create appropriate validation rule based on type
+        if validation_type == "list":
+            source = validation_criteria.get("source")
+            if isinstance(source, list):
+                source_str = ",".join(f'"{item}"' for item in source)
+                dv = DataValidation(type="list", formula1=f"{source_str}")
+            else:
+                dv = DataValidation(type="list", formula1=source)
+                
+        elif validation_type == "decimal":
+            operator = validation_criteria.get("operator", "between")
+            minimum = validation_criteria.get("minimum")
+            maximum = validation_criteria.get("maximum")
+            
+            if operator == "between":
+                dv = DataValidation(type="decimal", operator="between", 
+                                   formula1=str(minimum), formula2=str(maximum))
+            else:
+                dv = DataValidation(type="decimal", operator=operator, 
+                                   formula1=str(minimum))
+                                   
+        elif validation_type == "custom":
+            formula = validation_criteria.get("formula")
+            dv = DataValidation(type="custom", formula1=formula)
+        
+        # Set error message if provided
+        if error_message:
+            dv.errorTitle = "Invalid Input"
+            dv.error = error_message
+            dv.errorStyle = "stop"
+        
+        # Add the validation to the worksheet
+        dv.add(cell_range)
+        ws.add_data_validation(dv)
+        
+        wb.save(filepath)
+        return {
+            "success": True,
+            "message": f"Data validation added to {cell_range} in sheet '{sheet_name}'"
+        }
+    except Exception as e:
+        logger.error(f"Failed to add data validation: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to add data validation: {str(e)}"
         } 

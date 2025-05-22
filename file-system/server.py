@@ -1563,6 +1563,8 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             formula = arguments["formula"]
             protect_from_errors = arguments.get("protect_from_errors", True)
             handle_arrays = arguments.get("handle_arrays", True)
+            clear_spill_range = arguments.get("clear_spill_range", True)
+            spill_rows = arguments.get("spill_rows", 200)
 
             # If path doesn't exist, try to find it in allowed directories
             if not os.path.exists(path):
@@ -1587,7 +1589,7 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                 ]
 
             # Apply formula
-            result = apply_excel_formula(path, sheet_name, cell, formula, protect_from_errors, handle_arrays)
+            result = apply_excel_formula(path, sheet_name, cell, formula, protect_from_errors, handle_arrays, clear_spill_range, spill_rows)
 
             if result["success"]:
                 response_text = result["message"]
@@ -1600,6 +1602,8 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                 # Add array formula info if applicable
                 if "array_formula_type" in result:
                     response_text += f"\n\nApplied as {result['array_formula_type']} array formula."
+                    if "is_spill_formula" in result and result["is_spill_formula"]:
+                        response_text += f" Cells below/right have been cleared to ensure proper spill behavior."
                 
                 # Add external reference info if applicable
                 if "external_references" in result:
@@ -1619,6 +1623,7 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             formula_template = arguments["formula_template"]
             protect_from_errors = arguments.get("protect_from_errors", True)
             dynamic_calculation = arguments.get("dynamic_calculation", True)
+            clear_spill_range = arguments.get("clear_spill_range", True)
             chunk_size = arguments.get("chunk_size", 1000)
 
             # If path doesn't exist, try to find it in allowed directories
@@ -1646,7 +1651,7 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             # Apply formula to range
             result = apply_excel_formula_range(
                 path, sheet_name, start_cell, end_cell, formula_template, 
-                protect_from_errors, dynamic_calculation, chunk_size
+                protect_from_errors, dynamic_calculation, chunk_size, clear_spill_range
             )
 
             if result["success"]:
@@ -1796,6 +1801,9 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             alignment = arguments.get("alignment")
             wrap_text = arguments.get("wrap_text", False)
             border_style = arguments.get("border_style")
+            condition_column = arguments.get("condition_column")
+            format_entire_row = arguments.get("format_entire_row", False)
+            columns_to_format = arguments.get("columns_to_format")
 
             # If path doesn't exist, try to find it in allowed directories
             if not os.path.exists(path):
@@ -1818,19 +1826,17 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                         type="text", text=f"Access denied: {security_check['message']}"
                     )
                 ]
-            
+                
             # Apply conditional formatting
             result = apply_conditional_formatting(
-                path, sheet_name, cell_range, condition, 
-                bold, italic, font_size, font_color, bg_color, 
-                alignment, wrap_text, border_style
+                path, sheet_name, cell_range, condition,
+                bold, italic, font_size, font_color, bg_color,
+                alignment, wrap_text, border_style, condition_column, 
+                format_entire_row, columns_to_format
             )
             
             if result["success"]:
-                response_text = result["message"]
-                if "cells_formatted" in result and result["cells_formatted"] == 0:
-                    response_text += "\n\nNote: No cells matched the condition. Please check your condition syntax or data range."
-                return [types.TextContent(type="text", text=response_text)]
+                return [types.TextContent(type="text", text=result["message"])]
             else:
                 return [types.TextContent(type="text", text=result["error"])]
 

@@ -596,8 +596,18 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "handle_arrays": {
                         "type": "boolean",
-                        "description": "Whether to properly handle modern array formulas (XLOOKUP, FILTER, etc.) that spill results to adjacent cells. Defaults to true.",
+                        "description": "Whether to properly handle modern array formulas (XLOOKUP, FILTER, etc.)",
                         "default": True
+                    },
+                    "clear_spill_range": {
+                        "type": "boolean",
+                        "description": "Whether to automatically clear cells below/right to ensure array formulas can properly spill their results",
+                        "default": True
+                    },
+                    "spill_rows": {
+                        "type": "integer",
+                        "description": "For array formulas like UNIQUE, how many rows to clear below for potential results. Default is 200, increase for larger datasets.",
+                        "default": 200
                     }
                 },
                 "required": ["path", "sheet_name", "cell", "formula"]
@@ -636,7 +646,12 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "dynamic_calculation": {
                         "type": "boolean",
-                        "description": "Whether to optimize array formulas by applying once and letting Excel handle spill behavior. Improves performance. Defaults to true.",
+                        "description": "Whether to use dynamic array functions for better performance",
+                        "default": True
+                    },
+                    "clear_spill_range": {
+                        "type": "boolean",
+                        "description": "Whether to automatically clear cells below/right to ensure array formulas can properly spill their results",
                         "default": True
                     },
                     "chunk_size": {
@@ -750,10 +765,10 @@ def get_tool_definitions() -> list[types.Tool]:
                 "required": ["path", "sheet_name", "cell_range", "validation_type", "validation_criteria"]
             }
         ),
-        # Add the new conditional formatting tool
+        # Update the conditional formatting tool
         types.Tool(
             name="apply_conditional_formatting",
-            description="Apply formatting to cells that meet a specified condition. This efficiently applies styles to all cells in a range that match criteria without needing to filter and format cells one by one. Perfect for highlighting important data such as scores above thresholds, specific text values, dates, or other patterns.",
+            description="Apply sophisticated conditional formatting to Excel cells based on simple or complex conditions. Supports compound conditions with AND/OR operators that can combine different condition types (numeric, text, blank) in a single rule. This powerful tool efficiently highlights important data patterns without needing to manually filter and format cells.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -771,7 +786,25 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "condition": {
                         "type": "string",
-                        "description": "Condition for formatting using syntax like \">90\", \"='Yes'\", \"CONTAINS('text')\". Examples:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\"\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\""
+                        "description": "Condition for formatting with full support for complex expressions:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\" (not equal to zero)\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\"\n- Compound examples:\n  * \">50 AND <=70\" (values between 50-70)\n  * \"<20 OR >80\" (values below 20 or above 80)\n  * \"CONTAINS('Pass') OR =ISBLANK()\" (cells containing 'Pass' or empty cells)\n  * \"<>ISBLANK() AND STARTS_WITH('Q')\" (non-empty cells starting with 'Q')"
+                    },
+                    "condition_column": {
+                        "type": "string",
+                        "description": "Optional column letter that should be evaluated for the condition (e.g., 'D' for Units column). When specified, only this column is checked against the condition.",
+                        "default": None
+                    },
+                    "format_entire_row": {
+                        "type": "boolean",
+                        "description": "When true, formats the entire row if the condition is met. Useful for highlighting entire rows based on a value in a specific column.",
+                        "default": False
+                    },
+                    "columns_to_format": {
+                        "type": "array",
+                        "description": "Optional list of specific column letters to format when condition is met (e.g., ['A', 'C', 'D']). Use this to format only specific columns in matching rows. Takes precedence over format_entire_row.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": None
                     },
                     "bold": {
                         "type": "boolean",

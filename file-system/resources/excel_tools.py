@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union, Tuple
 import re
+import time
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -24,7 +25,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 logger = logging.getLogger(__name__)
 
 # Constants for formula handling
-ARRAY_FORMULA_TYPES = ["XLOOKUP", "FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE"]
+ARRAY_FORMULA_TYPES = ["XLOOKUP", "FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE", "TRANSPOSE"]
+ARRAY_REFERENCE_PATTERN = r'([A-Z]+[0-9]+)#'  # Matches references like A2# used in spilled array references
 EXTERNAL_REF_PATTERN = r'\[([^\]]+)\]'
 
 # Exceptions
@@ -1082,14 +1084,36 @@ def validate_excel_formula(formula: str) -> Dict[str, Any]:
         if incomplete_function:
             syntax_issues.append(f"Possible incomplete function: {incomplete_function.group(1)}")
         
-        # Detect array formula types
+        # Expanded array formula detection with better pattern matching
         is_array_formula = False
         array_formula_type = None
+        spill_direction = None
+        
+        # Enhanced detection of array formulas
         for array_type in ARRAY_FORMULA_TYPES:
-            if array_type in formula_str.upper():
+            # Improved regex to better detect the actual function usage
+            # This pattern matches function name followed by opening parenthesis,
+            # ensuring we're matching actual function calls, not just occurrences of the name
+            pattern = rf'\b{array_type}\s*\('
+            if re.search(pattern, formula_str.upper()):
                 is_array_formula = True
                 array_formula_type = array_type
+                
+                # Determine likely spill direction
+                if array_type in ["UNIQUE", "FILTER", "SORT", "SORTBY"]:
+                    spill_direction = "vertical"  # These typically spill downward
+                elif array_type == "TRANSPOSE":
+                    spill_direction = "horizontal"  # TRANSPOSE spills horizontally
+                else:
+                    spill_direction = "undetermined"  # Default
+                    
                 break
+                
+        # Enhanced detection of array references (like A2#)
+        array_references = []
+        array_ref_matches = re.findall(ARRAY_REFERENCE_PATTERN, formula_str)
+        for match in array_ref_matches:
+            array_references.append(match)
                 
         # Check for external references
         external_refs = []
@@ -1107,6 +1131,8 @@ def validate_excel_formula(formula: str) -> Dict[str, Any]:
             "needs_safety_wrapper": has_division and not has_division_safety,
             "is_array_formula": is_array_formula,
             "array_formula_type": array_formula_type,
+            "spill_direction": spill_direction,
+            "array_references": array_references,
             "external_references": external_refs
         }
         
@@ -1124,7 +1150,9 @@ def apply_excel_formula(
     cell: str,
     formula: str,
     protect_from_errors: bool = True,
-    handle_arrays: bool = True
+    handle_arrays: bool = True,
+    clear_spill_range: bool = True,
+    spill_rows: int = 200  # Increased default spill rows to ensure adequate space
 ) -> Dict[str, Any]:
     """Apply any Excel formula to a specific cell, with error handling.
     
@@ -1139,6 +1167,8 @@ def apply_excel_formula(
         formula: Excel formula to apply (with or without leading '=')
         protect_from_errors: Whether to auto-protect against errors like division by zero
         handle_arrays: Whether to properly handle modern array formulas (XLOOKUP, FILTER, etc.)
+        clear_spill_range: Whether to automatically clear potential spill range for array formulas
+        spill_rows: Number of rows to clear below for vertical spill formulas (default 200)
         
     Returns:
         Dictionary with success status and message
@@ -1178,18 +1208,87 @@ def apply_excel_formula(
                     ext_warnings.append(f"External workbook not found: {ext_ref}")
             if ext_warnings:
                 warnings.extend(ext_warnings)
+
+        # Check for array formula references (like A2#)
+        has_array_reference = bool(re.search(ARRAY_REFERENCE_PATTERN, formula_str))
+        if has_array_reference:
+            warnings.append(
+                "Formula contains spilled array references (using # notation). "
+                "Ensure the referenced array formulas are correctly set up in the worksheet."
+            )
                 
         # Handle array formulas specially if requested
         if handle_arrays and validation["is_array_formula"]:
-            ws[cell].value = formula_str
-            # Warn user about spillover
-            warnings.append(f"Applied as array formula ({validation['array_formula_type']}). Ensure space for results to spill.")
+            # Parse the target cell to get coordinates
+            try:
+                row_idx, col_idx = parse_cell_reference(cell)
+            except ValidationError as e:
+                return {
+                    "success": False,
+                    "error": f"Invalid cell reference: {str(e)}"
+                }
+                
+            # For array formulas, especially UNIQUE, clear potential spill range
+            # to ensure formula has room to display all results
+            if clear_spill_range:
+                # Clear more rows for UNIQUE, FILTER, etc. to ensure adequate space for spilling
+                if validation["array_formula_type"] in ["UNIQUE", "FILTER", "SORT", "SORTBY"]:
+                    max_potential_rows = min(spill_rows, ws.max_row - row_idx + 1)
+                    
+                    # Clear cells below
+                    cells_cleared = 0
+                    for r in range(row_idx + 1, row_idx + max_potential_rows + 1):
+                        if ws.cell(row=r, column=col_idx).value is not None:
+                            ws.cell(row=r, column=col_idx).value = None
+                            cells_cleared += 1
+                    
+                    warnings.append(
+                        f"Cleared {cells_cleared} cells below {cell} to ensure array formula can spill all results."
+                    )
+                
+                # If it's a formula that might spill horizontally (like TRANSPOSE)
+                if validation["array_formula_type"] in ["TRANSPOSE"]:
+                    max_potential_cols = min(30, ws.max_column - col_idx + 1)
+                    for c in range(col_idx + 1, col_idx + max_potential_cols + 1):
+                        if ws.cell(row=row_idx, column=c).value is not None:
+                            ws.cell(row=row_idx, column=c).value = None
+            
+            # Apply the array formula to the target cell
+            try:
+                ws[cell].value = formula_str
+                # Additional sleep to allow Excel to process the formula completely
+                # This can help with complex array formulas especially during rapid updates
+                time.sleep(0.1)
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Error applying array formula: {str(e)}"
+                }
+            
+            # Add specific message for UNIQUE formula to help user understand behavior
+            if validation["array_formula_type"] == "UNIQUE":
+                warnings.append(
+                    "UNIQUE formula will dynamically spill results downward as needed. "
+                    f"Cleared up to {spill_rows} cells below to ensure proper display."
+                )
+            else:
+                warnings.append(
+                    f"Applied as array formula ({validation['array_formula_type']}). "
+                    f"Space below/right has been cleared for results to spill properly."
+                )
         else:
             # Assign regular formula to cell
             ws[cell].value = formula_str
             
-        wb.save(filepath)
-        wb.close()
+        # Save workbook
+        try:
+            wb.save(filepath)
+            wb.close()
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error saving workbook after applying formula: {str(e)}"
+            }
         
         result = {
             "success": True,
@@ -1203,12 +1302,20 @@ def apply_excel_formula(
         # Add additional data when appropriate
         if validation["is_array_formula"]:
             result["array_formula_type"] = validation["array_formula_type"]
+            result["is_spill_formula"] = True
+            result["cells_cleared_for_spill"] = clear_spill_range
+            result["spill_rows_cleared"] = spill_rows if clear_spill_range else 0
         if validation["external_references"]:
             result["external_references"] = validation["external_references"]
             
         return result
     except Exception as e:
         logger.error(f"Failed to apply formula: {e}")
+        if 'wb' in locals() and wb is not None:
+            try:
+                wb.close()
+            except:
+                pass
         return {
             "success": False,
             "error": f"Failed to apply formula: {str(e)}"
@@ -1222,7 +1329,8 @@ def apply_excel_formula_range(
     formula_template: str,
     protect_from_errors: bool = True,
     dynamic_calculation: bool = True,
-    chunk_size: int = 1000
+    chunk_size: int = 1000,
+    clear_spill_range: bool = True
 ) -> Dict[str, Any]:
     """Apply an Excel formula to a range of cells, with error handling.
     
@@ -1239,6 +1347,7 @@ def apply_excel_formula_range(
         protect_from_errors: Whether to auto-protect against errors like division by zero
         dynamic_calculation: Whether to use dynamic array functions for better performance
         chunk_size: How many cells to process at once (for large ranges)
+        clear_spill_range: Whether to automatically clear potential spill range for array formulas
         
     Returns:
         Dictionary with success status and message
@@ -1284,10 +1393,11 @@ def apply_excel_formula_range(
             top_left_cell = f"{get_column_letter(min_col)}{min_row}"
             cell_formula = formula_template.replace("{row}", str(min_row)).replace("{col}", get_column_letter(min_col))
             
-            # Apply the array formula
+            # For array formulas like UNIQUE, we need to handle the spill behavior properly
+            # by calling our enhanced apply_excel_formula function
             result = apply_excel_formula(
                 filepath, sheet_name, top_left_cell, cell_formula, 
-                protect_from_errors, handle_arrays=True
+                protect_from_errors, handle_arrays=True, clear_spill_range=clear_spill_range
             )
             
             if not result["success"]:
@@ -1298,6 +1408,18 @@ def apply_excel_formula_range(
             result["cells_affected"] = total_cells
             result["applied_as"] = "single_array_formula"
             
+            # Add specific note about array formula behavior based on the formula type
+            if validation["array_formula_type"] == "UNIQUE":
+                warnings.append(
+                    "UNIQUE formula is designed to spill results automatically. "
+                    "The formula has been applied to the top cell only, and will display all unique values below."
+                )
+            elif validation["array_formula_type"] in ["FILTER", "SORT", "SORTBY"]:
+                warnings.append(
+                    f"{validation['array_formula_type']} formula is designed to spill results automatically. "
+                    "The formula has been applied to the top cell only."
+                )
+                
             if warnings:
                 if "warnings" not in result:
                     result["warnings"] = []
@@ -1609,7 +1731,10 @@ def apply_conditional_formatting(
     bg_color: Optional[str] = None,
     alignment: Optional[str] = None,
     wrap_text: bool = False,
-    border_style: Optional[str] = None
+    border_style: Optional[str] = None,
+    condition_column: Optional[str] = None,
+    format_entire_row: bool = False,
+    columns_to_format: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Apply conditional formatting to cells based on a specified condition.
     
@@ -1626,6 +1751,7 @@ def apply_conditional_formatting(
                    - Text: "='Yes'", "<>'No'", "CONTAINS('text')", "STARTS_WITH('A')"
                    - Date: ">DATE(2023,1,1)", "<=TODAY()"
                    - Blank: "=ISBLANK()", "<>ISBLANK()"
+                   - Compound conditions: ">50 AND <=70", "<20 OR >80", "CONTAINS('Pass') OR =ISBLANK()"
         bold: Whether to apply bold formatting to matching cells
         italic: Whether to apply italic formatting to matching cells
         font_size: Optional font size to apply to matching cells
@@ -1634,6 +1760,11 @@ def apply_conditional_formatting(
         alignment: Optional text alignment ('left', 'center', 'right') for matching cells
         wrap_text: Whether to enable text wrapping for matching cells
         border_style: Optional border style ('thin', 'medium', 'thick', 'dashed', 'dotted', 'double')
+        condition_column: Optional column letter to evaluate the condition on (e.g., 'D' for Units)
+        format_entire_row: Whether to format the entire row when condition is met (default False)
+        columns_to_format: Optional list of specific column letters to format when condition is met
+                           (e.g. ['A', 'C', 'D']). Only used when format_entire_row is False or
+                           when you want to format specific columns in the row
     
     Returns:
         Dictionary with success status, message, and count of formatted cells
@@ -1659,6 +1790,46 @@ def apply_conditional_formatting(
                 "success": False,
                 "error": f"Invalid cell range: {cell_range} - {str(e)}"
             }
+        
+        # If condition_column is specified, convert to column index
+        condition_col_idx = None
+        if condition_column:
+            try:
+                condition_col_idx = column_index_from_string(condition_column.upper().strip())
+                # Verify the condition column is within the range or at least a valid column
+                if condition_col_idx < 1:
+                    return {
+                        "success": False,
+                        "error": f"Invalid condition column: {condition_column}"
+                    }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Invalid condition column: {condition_column} - {str(e)}"
+                }
+        
+        # If columns_to_format is specified, convert to column indices
+        format_col_indices = []
+        if columns_to_format:
+            for col_letter in columns_to_format:
+                try:
+                    col_idx = column_index_from_string(col_letter.upper().strip())
+                    format_col_indices.append(col_idx)
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "error": f"Invalid format column: {col_letter} - {str(e)}"
+                    }
+            
+            # If columns_to_format is specified, we'll format only those specific columns
+            # regardless of what format_entire_row is set to
+            should_format_specific_columns = columns_to_format is not None and len(columns_to_format) > 0
+            
+            # If we're formatting specific columns, ensure format_entire_row is False
+            if should_format_specific_columns:
+                format_entire_row = False
+        else:
+            should_format_specific_columns = False
         
         # Set up font formatting options
         font_args = {}
@@ -1713,7 +1884,7 @@ def apply_conditional_formatting(
         formatted_cells_count = 0
         condition = condition.strip()
         
-        # Helper functions to evaluate conditions
+        # Enhanced helper functions to evaluate conditions with support for complex logic
         def evaluate_numeric_condition(cell_value, condition):
             if not isinstance(cell_value, (int, float)) and not str(cell_value).replace('.', '', 1).isdigit():
                 return False
@@ -1721,6 +1892,16 @@ def apply_conditional_formatting(
             try:
                 cell_value = float(cell_value) if cell_value is not None else 0
                 
+                # Check for compound conditions (AND, OR)
+                if " AND " in condition.upper():
+                    parts = condition.upper().split(" AND ")
+                    return all(evaluate_numeric_condition(cell_value, part.strip()) for part in parts)
+                    
+                if " OR " in condition.upper():
+                    parts = condition.upper().split(" OR ")
+                    return any(evaluate_numeric_condition(cell_value, part.strip()) for part in parts)
+                
+                # Single conditions
                 if condition.startswith(">="):
                     threshold = float(condition[2:].strip())
                     return cell_value >= threshold
@@ -1748,6 +1929,15 @@ def apply_conditional_formatting(
                 cell_value = ""
             cell_value = str(cell_value).lower()
             
+            # Check for compound conditions (AND, OR)
+            if " AND " in condition.upper():
+                parts = condition.upper().split(" AND ")
+                return all(evaluate_text_condition(cell_value, part.strip()) for part in parts)
+                
+            if " OR " in condition.upper():
+                parts = condition.upper().split(" OR ")
+                return any(evaluate_text_condition(cell_value, part.strip()) for part in parts)
+            
             if condition.startswith("='"):
                 # Exact match (case insensitive)
                 text = condition[2:-1].lower() if condition.endswith("'") else condition[2:].lower()
@@ -1773,91 +1963,211 @@ def apply_conditional_formatting(
         
         def evaluate_blank_condition(cell_value, condition):
             is_blank = cell_value is None or str(cell_value).strip() == ""
+            
+            # Check for compound conditions (AND, OR)
+            if " AND " in condition.upper():
+                parts = condition.upper().split(" AND ")
+                return all(evaluate_blank_condition(cell_value, part.strip()) for part in parts)
+                
+            if " OR " in condition.upper():
+                parts = condition.upper().split(" OR ")
+                return any(evaluate_blank_condition(cell_value, part.strip()) for part in parts)
+            
             if condition.upper() == "=ISBLANK()":
                 return is_blank
             elif condition.upper() == "<>ISBLANK()":
                 return not is_blank
             return False
+        
+        # Master condition evaluator that handles compound conditions across different types
+        def evaluate_condition(cell_value, condition):
+            # First check for top-level compound conditions
+            if " AND " in condition.upper():
+                parts = condition.upper().split(" AND ")
+                return all(evaluate_condition(cell_value, part.strip()) for part in parts)
+                
+            if " OR " in condition.upper():
+                parts = condition.upper().split(" OR ")
+                return any(evaluate_condition(cell_value, part.strip()) for part in parts)
             
-        # Track cells to format based on condition
+            # Then evaluate based on condition type
+            # Numeric conditions
+            if any(condition.startswith(op) for op in ["=", ">", "<", "<=", ">=", "<>"]) and not condition.startswith("='") and not condition.startswith("<>'"):
+                return evaluate_numeric_condition(cell_value, condition)
+            
+            # Text conditions
+            elif condition.startswith("='") or condition.startswith("<>'") or \
+                 condition.upper().startswith(("CONTAINS('"), ("STARTS_WITH('"), ("ENDS_WITH(")):
+                return evaluate_text_condition(cell_value, condition)
+            
+            # Blank/not blank conditions
+            elif condition.upper() in ["=ISBLANK()", "<>ISBLANK()"]:
+                return evaluate_blank_condition(cell_value, condition)
+                
+            # Fallback
+            return False
+            
+        # Track rows to format based on condition
+        rows_to_format = set()
         cells_to_format = []
         
-        # Evaluate condition for each cell in the range
+        # Evaluate condition for each row or cell in the range
         for row in range(min_row, max_row + 1):
-            for col in range(min_col, max_col + 1):
-                cell = worksheet.cell(row=row, column=col)
+            # Skip header row if it exists (first row of range)
+            if row == min_row and min_row != max_row:  # Skip only if we have multiple rows
+                # Assume first row is header and skip evaluation
+                continue
+                
+            # If we're checking a specific column for the condition
+            if condition_col_idx:
+                cell = worksheet.cell(row=row, column=condition_col_idx)
                 cell_value = cell.value
                 
-                # Skip header row if it exists (first row of range)
-                if row == min_row and min_row != max_row:  # Skip only if we have multiple rows
-                    # Assume first row is header and skip evaluation
-                    continue
+                # Use the master condition evaluator
+                should_format = evaluate_condition(cell_value, condition)
                 
-                # Evaluate different condition types
-                should_format = False
-                
-                # Numeric conditions
-                if any(condition.startswith(op) for op in ["=", ">", "<", "<="]):
-                    should_format = evaluate_numeric_condition(cell_value, condition)
-                
-                # Text conditions
-                elif condition.startswith("='") or condition.startswith("<>'") or \
-                     condition.upper().startswith(("CONTAINS('"), ("STARTS_WITH('"), ("ENDS_WITH(")):
-                    should_format = evaluate_text_condition(cell_value, condition)
-                
-                # Blank/not blank conditions
-                elif condition.upper() in ["=ISBLANK()", "<>ISBLANK()"]:
-                    should_format = evaluate_blank_condition(cell_value, condition)
-                
-                # If condition is met, add cell to formatting list
+                # If condition is met, add row to formatting list
                 if should_format:
-                    cells_to_format.append((row, col))
+                    if format_entire_row or should_format_specific_columns:
+                        rows_to_format.add(row)
+                    else:
+                        cells_to_format.append((row, condition_col_idx))
+            else:
+                # Original behavior: check each cell in the range
+                for col in range(min_col, max_col + 1):
+                    cell = worksheet.cell(row=row, column=col)
+                    cell_value = cell.value
+                    
+                    # Use the master condition evaluator
+                    should_format = evaluate_condition(cell_value, condition)
+                    
+                    # If condition is met, add cell to formatting list
+                    if should_format:
+                        if format_entire_row or should_format_specific_columns:
+                            rows_to_format.add(row)
+                            break  # Once we know the row should be formatted, no need to check other cells
+                        else:
+                            cells_to_format.append((row, col))
         
-        # Apply formatting to matching cells
-        for row, col in cells_to_format:
-            cell = worksheet.cell(row=row, column=col)
-            
-            # Apply font if any font properties set
-            if font_args:
-                # Start with existing font and update properties
-                new_font = Font(
-                    name=cell.font.name,
-                    bold=cell.font.bold,
-                    italic=cell.font.italic,
-                    size=cell.font.size,
-                    color=cell.font.color
-                )
-                # Update with specified properties
-                for key, value in font_args.items():
-                    setattr(new_font, key, value)
-                cell.font = new_font
-            
-            # Apply fill if specified
-            if fill:
-                cell.fill = fill
+        # Apply formatting to entire rows if needed
+        if format_entire_row and rows_to_format:
+            for row in rows_to_format:
+                for col in range(min_col, max_col + 1):
+                    cell = worksheet.cell(row=row, column=col)
+                    
+                    # Apply font if any font properties set
+                    if font_args:
+                        # Start with existing font and update properties
+                        new_font = Font(
+                            name=cell.font.name,
+                            bold=cell.font.bold,
+                            italic=cell.font.italic,
+                            size=cell.font.size,
+                            color=cell.font.color
+                        )
+                        # Update with specified properties
+                        for key, value in font_args.items():
+                            setattr(new_font, key, value)
+                        cell.font = new_font
+                    
+                    # Apply fill if specified
+                    if fill:
+                        cell.fill = fill
+                        
+                    # Apply alignment if specified
+                    if align:
+                        cell.alignment = align
+                        
+                    # Apply border if specified
+                    if border:
+                        cell.border = border
+                    
+                    formatted_cells_count += 1
+        # Apply formatting to specific columns in matching rows
+        elif should_format_specific_columns and rows_to_format:
+            for row in rows_to_format:
+                for col_idx in format_col_indices:
+                    cell = worksheet.cell(row=row, column=col_idx)
+                    
+                    # Apply font if any font properties set
+                    if font_args:
+                        # Start with existing font and update properties
+                        new_font = Font(
+                            name=cell.font.name,
+                            bold=cell.font.bold,
+                            italic=cell.font.italic,
+                            size=cell.font.size,
+                            color=cell.font.color
+                        )
+                        # Update with specified properties
+                        for key, value in font_args.items():
+                            setattr(new_font, key, value)
+                        cell.font = new_font
+                    
+                    # Apply fill if specified
+                    if fill:
+                        cell.fill = fill
+                        
+                    # Apply alignment if specified
+                    if align:
+                        cell.alignment = align
+                        
+                    # Apply border if specified
+                    if border:
+                        cell.border = border
+                    
+                    formatted_cells_count += 1
+        else:
+            # Apply formatting to individual cells
+            for row, col in cells_to_format:
+                cell = worksheet.cell(row=row, column=col)
                 
-            # Apply alignment if specified
-            if align:
-                cell.alignment = align
+                # Apply font if any font properties set
+                if font_args:
+                    # Start with existing font and update properties
+                    new_font = Font(
+                        name=cell.font.name,
+                        bold=cell.font.bold,
+                        italic=cell.font.italic,
+                        size=cell.font.size,
+                        color=cell.font.color
+                    )
+                    # Update with specified properties
+                    for key, value in font_args.items():
+                        setattr(new_font, key, value)
+                    cell.font = new_font
                 
-            # Apply border if specified
-            if border:
-                cell.border = border
-            
-            formatted_cells_count += 1
+                # Apply fill if specified
+                if fill:
+                    cell.fill = fill
+                    
+                # Apply alignment if specified
+                if align:
+                    cell.alignment = align
+                    
+                # Apply border if specified
+                if border:
+                    cell.border = border
+                
+                formatted_cells_count += 1
         
         # Save workbook
         wb.save(filepath)
         wb.close()
         
-        # Format range string for the message
-        range_string = cell_range
+        # Format message based on formatting mode
+        format_mode = "rows" if format_entire_row else "cells"
+        if columns_to_format:
+            format_mode = f"specified columns ({', '.join(columns_to_format)}) in matching rows"
+        
+        condition_info = f" in column {condition_column}" if condition_column else ""
         
         return {
             "success": True,
-            "message": f"Conditional formatting applied to {formatted_cells_count} cells matching condition '{condition}' in range {range_string}",
+            "message": f"Conditional formatting applied to {formatted_cells_count} {format_mode} matching condition '{condition}'{condition_info} in range {cell_range}",
             "cells_formatted": formatted_cells_count,
-            "condition_applied": condition
+            "condition_applied": condition,
+            "formatted_entire_rows": format_entire_row
         }
     except Exception as e:
         logger.error(f"Failed to apply conditional formatting: {e}")

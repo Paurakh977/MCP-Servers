@@ -59,4 +59,5 @@ __all__ = [
     'apply_excel_formula',
     'apply_excel_formula_range',
     'validate_excel_formula',
+    'apply_conditional_formatting',
 ] 

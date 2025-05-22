@@ -1595,4 +1595,275 @@ def add_data_validation(
         return {
             "success": False,
             "error": f"Failed to add data validation: {str(e)}"
+        }
+
+def apply_conditional_formatting(
+    filepath: str,
+    sheet_name: str,
+    cell_range: str,
+    condition: str,
+    bold: bool = False,
+    italic: bool = False,
+    font_size: Optional[int] = None,
+    font_color: Optional[str] = None,
+    bg_color: Optional[str] = None,
+    alignment: Optional[str] = None,
+    wrap_text: bool = False,
+    border_style: Optional[str] = None
+) -> Dict[str, Any]:
+    """Apply conditional formatting to cells based on a specified condition.
+    
+    This function efficiently applies formatting to cells in a range that meet specified criteria,
+    eliminating the need to manually filter and format cells one by one.
+    
+    Args:
+        filepath: Path to the Excel workbook
+        sheet_name: Name of the worksheet
+        cell_range: Range of cells to check and potentially format (e.g., 'A1:D10')
+        condition: Condition for formatting, using syntax like ">90", "='Yes'", "CONTAINS('text')"
+                   Example formats:
+                   - Numeric: ">90", "<=50", "=100", "<>0" (not equal to zero)
+                   - Text: "='Yes'", "<>'No'", "CONTAINS('text')", "STARTS_WITH('A')"
+                   - Date: ">DATE(2023,1,1)", "<=TODAY()"
+                   - Blank: "=ISBLANK()", "<>ISBLANK()"
+        bold: Whether to apply bold formatting to matching cells
+        italic: Whether to apply italic formatting to matching cells
+        font_size: Optional font size to apply to matching cells
+        font_color: Optional font color (hex code, with or without #) for matching cells
+        bg_color: Optional background color (hex code, with or without #) for matching cells 
+        alignment: Optional text alignment ('left', 'center', 'right') for matching cells
+        wrap_text: Whether to enable text wrapping for matching cells
+        border_style: Optional border style ('thin', 'medium', 'thick', 'dashed', 'dotted', 'double')
+    
+    Returns:
+        Dictionary with success status, message, and count of formatted cells
+    """
+    try:
+        # Load workbook
+        wb = load_workbook(filepath)
+        
+        # Validate sheet
+        if sheet_name not in wb.sheetnames:
+            return {
+                "success": False,
+                "error": f"Sheet '{sheet_name}' not found"
+            }
+            
+        worksheet = wb[sheet_name]
+        
+        # Parse cell range
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Invalid cell range: {cell_range} - {str(e)}"
+            }
+        
+        # Set up font formatting options
+        font_args = {}
+        if bold:
+            font_args["bold"] = True
+        if italic:
+            font_args["italic"] = True
+        if font_size:
+            font_args["size"] = font_size
+        if font_color:
+            # Handle color format (with or without #)
+            if font_color.startswith("#"):
+                font_color = font_color[1:]
+            font_args["color"] = font_color
+        
+        # Set up fill
+        fill = None
+        if bg_color:
+            # Handle color format (with or without #)
+            if bg_color.startswith("#"):
+                bg_color = bg_color[1:]
+            fill = PatternFill(start_color=bg_color, end_color=bg_color, fill_type="solid")
+        
+        # Set up alignment
+        align = None
+        if alignment or wrap_text:
+            align_horz = None
+            if alignment:
+                align_horz = {
+                    "left": "left",
+                    "center": "center",
+                    "right": "right"
+                }.get(alignment.lower())
+            align = Alignment(horizontal=align_horz, wrap_text=wrap_text)
+        
+        # Set up border
+        border = None
+        if border_style:
+            border_styles = {
+                "thin": Side(style="thin"),
+                "medium": Side(style="medium"),
+                "thick": Side(style="thick"),
+                "dashed": Side(style="dashed"),
+                "dotted": Side(style="dotted"),
+                "double": Side(style="double")
+            }
+            if border_style.lower() in border_styles:
+                side = border_styles[border_style.lower()]
+                border = Border(left=side, right=side, top=side, bottom=side)
+        
+        # Parse the condition
+        formatted_cells_count = 0
+        condition = condition.strip()
+        
+        # Helper functions to evaluate conditions
+        def evaluate_numeric_condition(cell_value, condition):
+            if not isinstance(cell_value, (int, float)) and not str(cell_value).replace('.', '', 1).isdigit():
+                return False
+                
+            try:
+                cell_value = float(cell_value) if cell_value is not None else 0
+                
+                if condition.startswith(">="):
+                    threshold = float(condition[2:].strip())
+                    return cell_value >= threshold
+                elif condition.startswith("<="):
+                    threshold = float(condition[2:].strip())
+                    return cell_value <= threshold
+                elif condition.startswith("<>"):
+                    threshold = float(condition[2:].strip())
+                    return cell_value != threshold
+                elif condition.startswith(">"):
+                    threshold = float(condition[1:].strip())
+                    return cell_value > threshold
+                elif condition.startswith("<"):
+                    threshold = float(condition[1:].strip())
+                    return cell_value < threshold
+                elif condition.startswith("="):
+                    threshold = float(condition[1:].strip())
+                    return cell_value == threshold
+                return False
+            except (ValueError, TypeError):
+                return False
+        
+        def evaluate_text_condition(cell_value, condition):
+            if cell_value is None:
+                cell_value = ""
+            cell_value = str(cell_value).lower()
+            
+            if condition.startswith("='"):
+                # Exact match (case insensitive)
+                text = condition[2:-1].lower() if condition.endswith("'") else condition[2:].lower()
+                return cell_value == text
+            elif condition.startswith("<>'"):
+                # Not equal match (case insensitive)
+                text = condition[3:-1].lower() if condition.endswith("'") else condition[3:].lower()
+                return cell_value != text
+            elif condition.upper().startswith("CONTAINS('"):
+                # Contains text (case insensitive)
+                text = condition[10:-2].lower() if condition.endswith("')") else condition[10:-1].lower()
+                return text in cell_value
+            elif condition.upper().startswith("STARTS_WITH('"):
+                # Starts with text (case insensitive)
+                text = condition[13:-2].lower() if condition.endswith("')") else condition[13:-1].lower()
+                return cell_value.startswith(text)
+            elif condition.upper().startswith("ENDS_WITH('"):
+                # Ends with text (case insensitive)
+                text = condition[11:-2].lower() if condition.endswith("')") else condition[11:-1].lower()
+                return cell_value.endswith(text)
+            
+            return False
+        
+        def evaluate_blank_condition(cell_value, condition):
+            is_blank = cell_value is None or str(cell_value).strip() == ""
+            if condition.upper() == "=ISBLANK()":
+                return is_blank
+            elif condition.upper() == "<>ISBLANK()":
+                return not is_blank
+            return False
+            
+        # Track cells to format based on condition
+        cells_to_format = []
+        
+        # Evaluate condition for each cell in the range
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                cell = worksheet.cell(row=row, column=col)
+                cell_value = cell.value
+                
+                # Skip header row if it exists (first row of range)
+                if row == min_row and min_row != max_row:  # Skip only if we have multiple rows
+                    # Assume first row is header and skip evaluation
+                    continue
+                
+                # Evaluate different condition types
+                should_format = False
+                
+                # Numeric conditions
+                if any(condition.startswith(op) for op in ["=", ">", "<", "<="]):
+                    should_format = evaluate_numeric_condition(cell_value, condition)
+                
+                # Text conditions
+                elif condition.startswith("='") or condition.startswith("<>'") or \
+                     condition.upper().startswith(("CONTAINS('"), ("STARTS_WITH('"), ("ENDS_WITH(")):
+                    should_format = evaluate_text_condition(cell_value, condition)
+                
+                # Blank/not blank conditions
+                elif condition.upper() in ["=ISBLANK()", "<>ISBLANK()"]:
+                    should_format = evaluate_blank_condition(cell_value, condition)
+                
+                # If condition is met, add cell to formatting list
+                if should_format:
+                    cells_to_format.append((row, col))
+        
+        # Apply formatting to matching cells
+        for row, col in cells_to_format:
+            cell = worksheet.cell(row=row, column=col)
+            
+            # Apply font if any font properties set
+            if font_args:
+                # Start with existing font and update properties
+                new_font = Font(
+                    name=cell.font.name,
+                    bold=cell.font.bold,
+                    italic=cell.font.italic,
+                    size=cell.font.size,
+                    color=cell.font.color
+                )
+                # Update with specified properties
+                for key, value in font_args.items():
+                    setattr(new_font, key, value)
+                cell.font = new_font
+            
+            # Apply fill if specified
+            if fill:
+                cell.fill = fill
+                
+            # Apply alignment if specified
+            if align:
+                cell.alignment = align
+                
+            # Apply border if specified
+            if border:
+                cell.border = border
+            
+            formatted_cells_count += 1
+        
+        # Save workbook
+        wb.save(filepath)
+        wb.close()
+        
+        # Format range string for the message
+        range_string = cell_range
+        
+        return {
+            "success": True,
+            "message": f"Conditional formatting applied to {formatted_cells_count} cells matching condition '{condition}' in range {range_string}",
+            "cells_formatted": formatted_cells_count,
+            "condition_applied": condition
+        }
+    except Exception as e:
+        logger.error(f"Failed to apply conditional formatting: {e}")
+        if 'wb' in locals():
+            wb.close()
+        return {
+            "success": False,
+            "error": f"Failed to apply conditional formatting: {str(e)}"
         } 

@@ -749,5 +749,75 @@ def get_tool_definitions() -> list[types.Tool]:
                 },
                 "required": ["path", "sheet_name", "cell_range", "validation_type", "validation_criteria"]
             }
+        ),
+        # Add the new conditional formatting tool
+        types.Tool(
+            name="apply_conditional_formatting",
+            description="Apply formatting to cells that meet a specified condition. This efficiently applies styles to all cells in a range that match criteria without needing to filter and format cells one by one. Perfect for highlighting important data such as scores above thresholds, specific text values, dates, or other patterns.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Name of the worksheet where conditional formatting should be applied."
+                    },
+                    "cell_range": {
+                        "type": "string",
+                        "description": "Range of cells to check and potentially format (e.g., 'A1:D10', 'B2:B20')."
+                    },
+                    "condition": {
+                        "type": "string",
+                        "description": "Condition for formatting using syntax like \">90\", \"='Yes'\", \"CONTAINS('text')\". Examples:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\"\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\""
+                    },
+                    "bold": {
+                        "type": "boolean",
+                        "description": "Whether to apply bold formatting to matching cells.",
+                        "default": False
+                    },
+                    "italic": {
+                        "type": "boolean",
+                        "description": "Whether to apply italic formatting to matching cells.",
+                        "default": False
+                    },
+                    "font_size": {
+                        "type": "integer",
+                        "description": "Font size to apply to matching cells.",
+                        "default": None
+                    },
+                    "font_color": {
+                        "type": "string",
+                        "description": "Font color (hex code e.g., 'FF0000' or '#FF0000' for red) for matching cells.",
+                        "default": None
+                    },
+                    "bg_color": {
+                        "type": "string",
+                        "description": "Background color (hex code e.g., 'FFFF00' or '#FFFF00' for yellow) for matching cells.",
+                        "default": None
+                    },
+                    "alignment": {
+                        "type": "string",
+                        "description": "Text alignment ('left', 'center', 'right') for matching cells.",
+                        "default": None
+                    },
+                    "wrap_text": {
+                        "type": "boolean",
+                        "description": "Whether to enable text wrapping for matching cells.",
+                        "default": False
+                    },
+                    "border_style": {
+                        "type": "string",
+                        "description": "Border style ('thin', 'medium', 'thick', 'dashed', 'dotted', 'double') for matching cells.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "cell_range", "condition"],
+                "additionalProperties": False
+            },
+            idempotentHint=False,
+            readOnlyHint=False
         )
     ] 

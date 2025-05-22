@@ -154,6 +154,7 @@ from resources.excel_tools import (
     add_excel_column,
     validate_excel_formula,
     add_data_validation,
+    apply_conditional_formatting,
 )
 
 # Initialize allowed directories list - will be populated with command-line arguments
@@ -1778,6 +1779,58 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             
             if result["success"]:
                 return [types.TextContent(type="text", text=result["message"])]
+            else:
+                return [types.TextContent(type="text", text=result["error"])]
+
+        # Add the new tool handler
+        elif tool_name == "apply_conditional_formatting":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            cell_range = arguments["cell_range"]
+            condition = arguments["condition"]
+            bold = arguments.get("bold", False)
+            italic = arguments.get("italic", False)
+            font_size = arguments.get("font_size")
+            font_color = arguments.get("font_color")
+            bg_color = arguments.get("bg_color")
+            alignment = arguments.get("alignment")
+            wrap_text = arguments.get("wrap_text", False)
+            border_style = arguments.get("border_style")
+
+            # If path doesn't exist, try to find it in allowed directories
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    path = found_path
+                else:
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find Excel file matching '{path}' in allowed directories"
+                        )
+                    ]
+                    
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                return [
+                    types.TextContent(
+                        type="text", text=f"Access denied: {security_check['message']}"
+                    )
+                ]
+            
+            # Apply conditional formatting
+            result = apply_conditional_formatting(
+                path, sheet_name, cell_range, condition, 
+                bold, italic, font_size, font_color, bg_color, 
+                alignment, wrap_text, border_style
+            )
+            
+            if result["success"]:
+                response_text = result["message"]
+                if "cells_formatted" in result and result["cells_formatted"] == 0:
+                    response_text += "\n\nNote: No cells matched the condition. Please check your condition syntax or data range."
+                return [types.TextContent(type="text", text=response_text)]
             else:
                 return [types.TextContent(type="text", text=result["error"])]
 

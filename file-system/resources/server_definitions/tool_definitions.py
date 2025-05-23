@@ -569,7 +569,7 @@ def get_tool_definitions() -> list[types.Tool]:
         ),
         types.Tool(
             name="apply_excel_formula",
-            description="Apply any Excel formula to a specific cell. Handles any valid Excel formula with comprehensive syntax validation and ensures proper cell reference formatting. Enables calculations, lookups, conditionals, and other Excel functions.",
+            description="Apply any Excel formula to a specific cell with robust error handling and support for advanced features. Handles modern array formulas (XLOOKUP, FILTER, UNIQUE), cross-worksheet references, external workbook references, and protects against common errors like division by zero. Automatically performs syntax validation, ensures proper formatting, and provides detailed feedback.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -579,26 +579,160 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "sheet_name": {
                         "type": "string",
-                        "description": "Worksheet name"
+                        "description": "Name of the worksheet where the formula should be applied."
                     },
                     "cell": {
                         "type": "string",
-                        "description": "Target cell reference to apply the formula (e.g., 'A1', 'C5')"
+                        "description": "Cell reference where formula should be applied (e.g., 'A1', 'B5')."
                     },
                     "formula": {
-                        "type": "string",
-                        "description": "Excel formula to apply (with or without leading '='). Examples: '=SUM(A1:A10)', 'AVERAGE(B1:B20)', '=A1+B1*C1'"
+                        "type": "string", 
+                        "description": "Excel formula to apply (with or without leading '='). Can include references to other sheets, workbooks, and use any Excel function."
+                    },
+                    "protect_from_errors": {
+                        "type": "boolean",
+                        "description": "Whether to automatically protect against errors by wrapping risky formulas in IFERROR(). Defaults to true.",
+                        "default": True
+                    },
+                    "handle_arrays": {
+                        "type": "boolean",
+                        "description": "Whether to properly handle modern array formulas (XLOOKUP, FILTER, etc.)",
+                        "default": True
+                    },
+                    "clear_spill_range": {
+                        "type": "boolean",
+                        "description": "Whether to automatically clear cells below/right to ensure array formulas can properly spill their results",
+                        "default": True
+                    },
+                    "spill_rows": {
+                        "type": "integer",
+                        "description": "For array formulas like UNIQUE, how many rows to clear below for potential results. Default is 200, increase for larger datasets.",
+                        "default": 200
                     }
                 },
-                "required": ["path", "sheet_name", "cell", "formula"],
+                "required": ["path", "sheet_name", "cell", "formula"]
+            }
+        ),
+        types.Tool(
+            name="apply_excel_formula_range",
+            description="Apply formulas to a range of cells with powerful templating, performance optimization for large datasets, and support for modern array functions. Use {row} and {col} placeholders in formulas that will be replaced with the current row number and column letter. Handles chunked processing for large ranges, modern array formulas, and provides detailed feedback on any issues. Ideal for calculating multiple cells with a pattern.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Name of the worksheet where the formula should be applied."
+                    },
+                    "start_cell": {
+                        "type": "string",
+                        "description": "Top-left cell of the range (e.g., 'A1', 'B5')."
+                    },
+                    "end_cell": {
+                        "type": "string",
+                        "description": "Bottom-right cell of the range (e.g., 'A10', 'D20')."
+                    },
+                    "formula_template": {
+                        "type": "string",
+                        "description": "Formula template with {row} and/or {col} placeholders that will be replaced with the current row number and column letter. Example: '=SUM(A{row}:E{row})' or '=AVERAGE({col}1:{col}10)'."
+                    },
+                    "protect_from_errors": {
+                        "type": "boolean",
+                        "description": "Whether to automatically protect against errors by wrapping risky formulas in IFERROR(). Defaults to true.",
+                        "default": True
+                    },
+                    "dynamic_calculation": {
+                        "type": "boolean",
+                        "description": "Whether to use dynamic array functions for better performance",
+                        "default": True
+                    },
+                    "clear_spill_range": {
+                        "type": "boolean",
+                        "description": "Whether to automatically clear cells below/right to ensure array formulas can properly spill their results",
+                        "default": True
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "description": "For large ranges, how many cells to process at once before saving. Helps with memory usage for large workbooks. Defaults to 1000.",
+                        "default": 1000
+                    }
+                },
+                "required": ["path", "sheet_name", "start_cell", "end_cell", "formula_template"]
+            }
+        ),
+        types.Tool(
+            name="delete_excel_workbook",
+            description="Delete an entire Excel workbook file from the file system. This permanently removes the file and cannot be undone.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook to delete. Can be absolute path, relative path, or filename to search for."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": False
+            },
+            idempotentHint=False,
+            readOnlyHint=False
+        ),
+        # Add the add_excel_column tool definition
+        types.Tool(
+            name="add_excel_column",
+            description="Add a new column to an Excel worksheet without rewriting the entire sheet. This is the preferred way to add a column to existing data, as it preserves all existing content and formatting. You can specify where to insert the column and add data values for the new column.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Name of the worksheet to modify"
+                    },
+                    "column_name": {
+                        "type": "string",
+                        "description": "Name for the new column (header text)"
+                    },
+                    "column_position": {
+                        "type": "string",
+                        "description": "Optional column letter where to insert (e.g., 'C' to insert as third column). If not provided, adds to the end of existing data.",
+                        "default": None
+                    },
+                    "data": {
+                        "type": "array",
+                        "description": "Optional list of values for the column. Length should match the data rows in the sheet.",
+                        "items": {
+                            "type": ["string", "number", "boolean", "null"]
+                        },
+                        "default": None
+                    },
+                    "header_style": {
+                        "type": "object",
+                        "description": "Optional styling for the header cell (e.g., {'bold': true, 'bg_color': 'FFFF00', 'font_size': 12, 'alignment': 'center'})",
+                        "default": None,
+                        "properties": {
+                            "bold": {"type": "boolean"},
+                            "bg_color": {"type": "string"},
+                            "font_size": {"type": "integer"},
+                            "alignment": {"type": "string"}
+                        }
+                    }
+                },
+                "required": ["path", "sheet_name", "column_name"],
                 "additionalProperties": False
             },
             idempotentHint=False,
             readOnlyHint=False
         ),
         types.Tool(
-            name="apply_excel_formula_range",
-            description="Apply an Excel formula across a range of cells, automatically adjusting row references. Perfect for filling columns with formulas that need to reference the current row, such as grading, calculations, and conditional formulas. The formula template should include {row} placeholders which will be replaced with the actual row number for each cell in the range.",
+            name="add_data_validation",
+            description="Add data validation rules to Excel cells, supporting dropdown lists, number ranges, date validation, text length limits, and custom formulas. Creates interactive dropdown menus, limits input to valid values, and can display custom error messages.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -608,22 +742,112 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "sheet_name": {
                         "type": "string",
-                        "description": "Worksheet name"
+                        "description": "Name of the worksheet where validation should be applied."
                     },
-                    "start_cell": {
+                    "cell_range": {
                         "type": "string",
-                        "description": "Top-left cell of the range (e.g., 'L2')"
+                        "description": "Range of cells to apply validation to (e.g., 'A1:A10', 'B2:D15')."
                     },
-                    "end_cell": {
+                    "validation_type": {
                         "type": "string",
-                        "description": "Bottom-right cell of the range (e.g., 'L36')"
+                        "description": "Type of validation to apply: 'list' (dropdown), 'decimal', 'date', 'textLength', or 'custom'.",
+                        "enum": ["list", "decimal", "date", "textLength", "custom"]
                     },
-                    "formula_template": {
+                    "validation_criteria": {
+                        "type": "object",
+                        "description": "Criteria for validation, depends on validation_type. For 'list': {\"source\": [\"Option1\", \"Option2\"]} or {\"source\": \"=Sheet2!A1:A10\"}. For 'decimal': {\"operator\": \"between\", \"minimum\": 1, \"maximum\": 100}. For 'custom': {\"formula\": \"=AND(A1>0,A1<100)\"}."
+                    },
+                    "error_message": {
                         "type": "string",
-                        "description": "Excel formula template with {row} placeholders that will be replaced with the actual row number. Example: 'IF(F{row}>=90,\"Excellent\",IF(F{row}>=80,\"Good\",IF(F{row}>=70,\"Average\",IF(F{row}>=60,\"Pass\",\"Fail\"))))'"
+                        "description": "Optional custom error message to display when validation fails."
                     }
                 },
-                "required": ["path", "sheet_name", "start_cell", "end_cell", "formula_template"],
+                "required": ["path", "sheet_name", "cell_range", "validation_type", "validation_criteria"]
+            }
+        ),
+        # Update the conditional formatting tool
+        types.Tool(
+            name="apply_conditional_formatting",
+            description="Apply sophisticated conditional formatting to Excel cells based on simple or complex conditions. Supports compound conditions with AND/OR operators that can combine different condition types (numeric, text, blank) in a single rule. This powerful tool efficiently highlights important data patterns without needing to manually filter and format cells.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Name of the worksheet where conditional formatting should be applied."
+                    },
+                    "cell_range": {
+                        "type": "string",
+                        "description": "Range of cells to check and potentially format (e.g., 'A1:D10', 'B2:B20')."
+                    },
+                    "condition": {
+                        "type": "string",
+                        "description": "Condition for formatting with full support for complex expressions:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\" (not equal to zero)\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\"\n- Compound examples:\n  * \">50 AND <=70\" (values between 50-70)\n  * \"<20 OR >80\" (values below 20 or above 80)\n  * \"CONTAINS('Pass') OR =ISBLANK()\" (cells containing 'Pass' or empty cells)\n  * \"<>ISBLANK() AND STARTS_WITH('Q')\" (non-empty cells starting with 'Q')"
+                    },
+                    "condition_column": {
+                        "type": "string",
+                        "description": "Optional column letter that should be evaluated for the condition (e.g., 'D' for Units column). When specified, only this column is checked against the condition.",
+                        "default": None
+                    },
+                    "format_entire_row": {
+                        "type": "boolean",
+                        "description": "When true, formats the entire row if the condition is met. Useful for highlighting entire rows based on a value in a specific column.",
+                        "default": False
+                    },
+                    "columns_to_format": {
+                        "type": "array",
+                        "description": "Optional list of specific column letters to format when condition is met (e.g., ['A', 'C', 'D']). Use this to format only specific columns in matching rows. Takes precedence over format_entire_row.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": None
+                    },
+                    "bold": {
+                        "type": "boolean",
+                        "description": "Whether to apply bold formatting to matching cells.",
+                        "default": False
+                    },
+                    "italic": {
+                        "type": "boolean",
+                        "description": "Whether to apply italic formatting to matching cells.",
+                        "default": False
+                    },
+                    "font_size": {
+                        "type": "integer",
+                        "description": "Font size to apply to matching cells.",
+                        "default": None
+                    },
+                    "font_color": {
+                        "type": "string",
+                        "description": "Font color (hex code e.g., 'FF0000' or '#FF0000' for red) for matching cells.",
+                        "default": None
+                    },
+                    "bg_color": {
+                        "type": "string",
+                        "description": "Background color (hex code e.g., 'FFFF00' or '#FFFF00' for yellow) for matching cells.",
+                        "default": None
+                    },
+                    "alignment": {
+                        "type": "string",
+                        "description": "Text alignment ('left', 'center', 'right') for matching cells.",
+                        "default": None
+                    },
+                    "wrap_text": {
+                        "type": "boolean",
+                        "description": "Whether to enable text wrapping for matching cells.",
+                        "default": False
+                    },
+                    "border_style": {
+                        "type": "string",
+                        "description": "Border style ('thin', 'medium', 'thick', 'dashed', 'dotted', 'double') for matching cells.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "cell_range", "condition"],
                 "additionalProperties": False
             },
             idempotentHint=False,

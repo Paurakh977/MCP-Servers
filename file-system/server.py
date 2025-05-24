@@ -155,6 +155,7 @@ from resources.excel_tools import (
     validate_excel_formula,
     add_data_validation,
     apply_conditional_formatting,
+    read_excel_with_formulas,
 )
 
 # Initialize allowed directories list - will be populated with command-line arguments
@@ -362,112 +363,16 @@ async def read_resource(uri: AnyUrl) -> str:
                 if file_extension != ".xlsx":
                     return json.dumps({"error": f"Not an Excel file: {path}"})
 
-                # Read the specific sheet
+                # Use the formula-aware Excel reader
                 try:
-                    workbook = openpyxl.load_workbook(path, data_only=True)
-
-                    # Validate sheet exists
-                    if sheet_name not in workbook.sheetnames:
-                        workbook.close()
-                        return json.dumps(
-                            {"error": f"Sheet '{sheet_name}' not found in workbook"}
-                        )
-
-                    sheet = workbook[sheet_name]
-
-                    # Parse cell range if provided
-                    if cell_range:
-                        try:
-                            min_col, min_row, max_col, max_row = range_boundaries(
-                                cell_range
-                            )
-                        except ValueError:
-                            workbook.close()
-                            return json.dumps(
-                                {"error": f"Invalid cell range format: {cell_range}"}
-                            )
-                    else:
-                        # Use full sheet range
-                        min_col, min_row, max_col, max_row = range_boundaries(
-                            sheet.calculate_dimension()
-                        )
-
-                    # Get column headers (first row)
-                    columns = []
-                    for col in range(min_col, max_col + 1):
-                        cell = sheet.cell(min_row, col)
-                        header = (
-                            cell.value
-                            if cell.value is not None
-                            else f"Column {get_column_letter(col)}"
-                        )
-                        columns.append(header)
-
-                    # Collect non-empty rows
-                    records = []
-                    for row in range(min_row + 1, max_row + 1):
-                        values = []
-                        row_has_data = False
-
-                        for col in range(min_col, max_col + 1):
-                            cell = sheet.cell(row, col)
-                            value = cell.value
-
-                            # Convert datetime objects to ISO format
-                            if isinstance(value, datetime):
-                                value = value.isoformat()
-
-                            values.append(value)
-                            if value is not None and value != "":
-                                row_has_data = True
-
-                        if row_has_data:
-                            records.append(
-                                {
-                                    "row": row,
-                                    "values": values,
-                                    "cell_refs": [
-                                        f"{get_column_letter(col)}{row}"
-                                        for col in range(min_col, max_col + 1)
-                                    ],
-                                }
-                            )
-
-                    # Count charts and images
-                    chart_count = len([drawing for drawing in sheet._charts])
-                    image_count = len([drawing for drawing in sheet._images])
-
-                    # Prepare sheet data
-                    sheet_data = {
-                        "sheet_name": sheet_name,
-                        "dimensions": cell_range or sheet.calculate_dimension(),
-                        "non_empty_cells": len(records),
-                        "charts": chart_count,
-                        "images": image_count,
-                        "columns": columns,
-                        "column_refs": [
-                            get_column_letter(col)
-                            for col in range(min_col, max_col + 1)
-                        ],
-                        "records": records,
-                        "metadata": {
-                            "total_rows": max_row - min_row + 1,
-                            "total_columns": max_col - min_col + 1,
-                            "visible_rows": len(records),
-                            "has_charts": chart_count > 0,
-                            "has_images": image_count > 0,
-                        },
-                    }
-
-                    workbook.close()
-                    return json.dumps(sheet_data)
-
+                    result = read_excel_with_formulas(path, sheet_name, cell_range)
+                    
+                    if not result.get("success", True):
+                        return json.dumps({"error": result.get("error", "Failed to read Excel sheet")})
+                        
+                    return json.dumps(result)
                 except Exception as e:
-                    if "workbook" in locals():
-                        workbook.close()
-                    return json.dumps(
-                        {"error": f"Failed to read Excel sheet: {str(e)}"}
-                    )
+                    return json.dumps({"error": f"Failed to read Excel sheet: {str(e)}"})
 
             except Exception as e:
                 return json.dumps({"error": f"Failed to process Excel sheet: {str(e)}"})
@@ -776,123 +681,34 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                     types.TextContent(type="text", text=f"Not an Excel file: {path}")
                 ]
 
-            # Read the specific sheet
+            # Use the formula-aware Excel reader
             try:
-                workbook = openpyxl.load_workbook(path, data_only=True)
-
-                # Validate sheet exists
-                if sheet_name not in workbook.sheetnames:
-                    workbook.close()
+                result = read_excel_with_formulas(path, sheet_name, cell_range)
+                
+                if not result.get("success", True):
                     return [
                         types.TextContent(
-                            type="text",
-                            text=f"Sheet '{sheet_name}' not found in workbook",
+                            type="text", 
+                            text=f"Failed to read Excel sheet: {result.get('error', 'Unknown error')}"
                         )
                     ]
-
-                sheet = workbook[sheet_name]
-
-                # Parse cell range if provided
-                if cell_range:
-                    try:
-                        min_col, min_row, max_col, max_row = range_boundaries(
-                            cell_range
-                        )
-                    except ValueError:
-                        workbook.close()
-                        return [
-                            types.TextContent(
-                                type="text",
-                                text=f"Invalid cell range format: {cell_range}",
-                            )
-                        ]
-                else:
-                    # Use full sheet range
-                    min_col, min_row, max_col, max_row = range_boundaries(
-                        sheet.calculate_dimension()
-                    )
-
-                # Get column headers (first row)
-                columns = []
-                for col in range(min_col, max_col + 1):
-                    cell = sheet.cell(min_row, col)
-                    header = (
-                        cell.value
-                        if cell.value is not None
-                        else f"Column {get_column_letter(col)}"
-                    )
-                    columns.append(header)
-
-                # Collect non-empty rows
-                records = []
-                for row in range(min_row + 1, max_row + 1):
-                    values = []
-                    row_has_data = False
-
-                    for col in range(min_col, max_col + 1):
-                        cell = sheet.cell(row, col)
-                        value = cell.value
-
-                        # Convert datetime objects to ISO format
-                        if isinstance(value, datetime):
-                            value = value.isoformat()
-
-                        values.append(value)
-                        if value is not None and value != "":
-                            row_has_data = True
-
-                    if row_has_data:
-                        records.append(
-                            {
-                                "row": row,
-                                "values": values,
-                                "cell_refs": [
-                                    f"{get_column_letter(col)}{row}"
-                                    for col in range(min_col, max_col + 1)
-                                ],
-                            }
-                        )
-
-                # Count charts and images
-                chart_count = len([drawing for drawing in sheet._charts])
-                image_count = len([drawing for drawing in sheet._images])
-
-                # Prepare sheet data
-                sheet_data = {
-                    "sheet_name": sheet_name,
-                    "dimensions": cell_range or sheet.calculate_dimension(),
-                    "non_empty_cells": len(records),
-                    "charts": chart_count,
-                    "images": image_count,
-                    "columns": columns,
-                    "column_refs": [
-                        get_column_letter(col) for col in range(min_col, max_col + 1)
-                    ],
-                    "records": records,
-                    "metadata": {
-                        "total_rows": max_row - min_row + 1,
-                        "total_columns": max_col - min_col + 1,
-                        "visible_rows": len(records),
-                        "has_charts": chart_count > 0,
-                        "has_images": image_count > 0,
-                    },
-                }
-
-                workbook.close()
-                return [
-                    types.TextContent(
-                        type="text", text=json.dumps(sheet_data, indent=2)
-                    )
-                ]
-
+                    
+                # Format the output to be more informative about formulas
+                response_text = json.dumps(result, indent=2)
+                
+                # If there are formulas, add a note at the top
+                if result.get("sheet", {}).get("has_formulas", False):
+                    formula_info = "\n".join([
+                        "NOTICE: This sheet contains formulas!",
+                        "Formula cells are included in the 'formula_cells' section.",
+                        "Each record with formulas contains both the formula and calculated value.",
+                        "--------------------------------------------------------------\n"
+                    ])
+                    response_text = formula_info + response_text
+                
+                return [types.TextContent(type="text", text=response_text)]
             except Exception as e:
-                if "workbook" in locals():
-                    workbook.close()
-                return [
-                    types.TextContent(
-                        type="text", text=f"Failed to read Excel sheet: {str(e)}"
-                    )
-                ]
+                return [types.TextContent(type="text", text=f"Failed to read Excel sheet: {str(e)}")]
 
         elif tool_name == "list_directory":
             path = arguments["path"]

@@ -14,6 +14,7 @@ import re
 import time
 
 from openpyxl import Workbook, load_workbook
+import openpyxl
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.cell import range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
@@ -49,6 +50,15 @@ class RangeError(ExcelError):
 class ValidationError(ExcelError):
     """Error related to validation"""
     pass
+
+# Add after imports section (around line 20)
+try:
+    from formulas import Parser
+    from formulas.errors import FormulaError
+    has_formula_engine = True
+except ImportError:
+    has_formula_engine = False
+    print("Formulas library not installed. For formula evaluation: pip install formulas")
 
 # Helper Functions
 def parse_cell_reference(cell_ref: str) -> Tuple[int, int]:
@@ -2177,3 +2187,391 @@ def apply_conditional_formatting(
             "success": False,
             "error": f"Failed to apply conditional formatting: {str(e)}"
         } 
+
+def evaluate_excel_formula(formula_str: str, context_values: dict = None) -> Dict[str, Any]:
+    """Evaluate an Excel formula using the formulas library.
+    
+    Args:
+        formula_str: The Excel formula string to evaluate (with or without leading =)
+        context_values: Optional dictionary mapping cell references to values for variables in the formula
+        
+    Returns:
+        Dictionary with evaluation result and metadata
+    """
+    if not has_formula_engine:
+        return {
+            "success": False,
+            "error": "Formulas library not installed. Install with: pip install formulas",
+            "formula": formula_str,
+            "value": None
+        }
+        
+    try:
+        # Ensure formula starts with '='
+        if not formula_str.startswith('='):
+            formula_str = f"={formula_str}"
+            
+        # Create a parser and parse the formula
+        parser = Parser()
+        ast = parser.ast(formula_str)[1].compile()
+        
+        # If we have context values, use them for evaluation
+        if context_values:
+            inputs = context_values
+        else:
+            inputs = {}
+            
+        # Evaluate the formula
+        result = ast(inputs)
+        
+        # Handle special types for JSON serialization
+        try:
+            import numpy as np
+            if isinstance(result, np.ndarray):
+                result = result.item()  # Convert numpy array to Python scalar
+        except (ImportError, AttributeError, Exception):
+            pass
+            
+        # Convert other types if needed
+        if not isinstance(result, (int, float, str, bool, type(None))):
+            try:
+                result = float(result)
+            except (TypeError, ValueError):
+                try:
+                    result = str(result)
+                except Exception:
+                    result = None
+            
+        return {
+            "success": True,
+            "formula": formula_str,
+            "value": result,
+            "value_type": type(result).__name__
+        }
+        
+    except Exception as e:
+        # For simple multiplication formulas, try manual evaluation
+        if "*" in formula_str and formula_str.count("*") == 1 and context_values:
+            try:
+                # Extract cell references
+                formula_parts = formula_str.strip("=").split("*")
+                if len(formula_parts) == 2:
+                    ref1, ref2 = formula_parts[0].strip(), formula_parts[1].strip()
+                    val1 = context_values.get(ref1)
+                    val2 = context_values.get(ref2)
+                    
+                    if val1 is not None and val2 is not None:
+                        try:
+                            result = float(val1) * float(val2)
+                            return {
+                                "success": True,
+                                "formula": formula_str,
+                                "value": result,
+                                "value_type": type(result).__name__,
+                                "evaluated_by": "manual_calculation"
+                            }
+                        except (TypeError, ValueError):
+                            pass
+            except Exception:
+                pass
+        
+        return {
+            "success": False,
+            "error": f"Formula evaluation error: {str(e)}",
+            "formula": formula_str,
+            "value": None
+        }
+
+def read_excel_with_formulas(filepath: str, sheet_name: str = None, cell_range: str = None) -> Dict[str, Any]:
+    """Read Excel data with enhanced formula handling.
+    
+    This function reads Excel data and handles formulas properly, returning both the 
+    formula text and evaluated values. It uses a combination of openpyxl and the formulas
+    library to provide complete formula information.
+    
+    Args:
+        filepath: Path to the Excel file
+        sheet_name: Optional specific sheet to read. If None, returns file info only
+        cell_range: Optional cell range to read (e.g. 'A1:D10'). If None, reads all cells
+        
+    Returns:
+        Dictionary containing file info and optionally sheet data with formula handling
+    """
+    try:
+        # First load without data_only to get formulas
+        workbook_formulas = openpyxl.load_workbook(filepath, data_only=False)
+        
+        # Then load with data_only to get calculated values
+        workbook_values = openpyxl.load_workbook(filepath, data_only=True)
+        
+        # Basic file info
+        file_info = {
+            "file": os.path.basename(filepath),
+            "sheets": []
+        }
+        
+        # Get info for all sheets
+        for ws_name in workbook_formulas.sheetnames:
+            ws_formulas = workbook_formulas[ws_name]
+            ws_values = workbook_values[ws_name]
+            
+            # Get sheet dimensions
+            min_col, min_row, max_col, max_row = range_boundaries(ws_formulas.calculate_dimension())
+            
+            # Get column headers (first row)
+            columns = []
+            column_refs = []
+            for col in range(min_col, max_col + 1):
+                cell = ws_formulas.cell(min_row, col)
+                header = cell.value if cell.value is not None else f"Column {get_column_letter(col)}"
+                columns.append(header)
+                column_refs.append(get_column_letter(col))
+            
+            sheet_info = {
+                "name": ws_name,
+                "dimensions": ws_formulas.calculate_dimension(),
+                "row_count": ws_formulas.max_row,
+                "column_count": max_col - min_col + 1,
+                "columns": columns,
+                "column_refs": column_refs
+            }
+            file_info["sheets"].append(sheet_info)
+            
+            # If this is the requested sheet, collect detailed data
+            if sheet_name and ws_name == sheet_name:
+                # Parse cell range if provided
+                if cell_range:
+                    try:
+                        min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+                    except ValueError:
+                        return {
+                            "success": False,
+                            "error": f"Invalid cell range format: {cell_range}"
+                        }
+                
+                # Get column headers (first row)
+                columns = []
+                for col in range(min_col, max_col + 1):
+                    cell = ws_formulas.cell(min_row, col)
+                    columns.append(cell.value if cell.value is not None else "")
+                
+                # Build context values for formula evaluation - collect all cell values from data_only workbook
+                context_values = {}
+                all_values = {}
+                
+                # First pass - collect all values from the data_only workbook
+                for r in range(1, ws_values.max_row + 1):
+                    for c in range(1, ws_values.max_column + 1):
+                        cell_ref = f"{get_column_letter(c)}{r}"
+                        cell_value = ws_values.cell(row=r, column=c).value
+                        
+                        # Skip None values to avoid formula evaluation issues
+                        if cell_value is not None:
+                            # Handle datetime objects for formula calculations
+                            if isinstance(cell_value, datetime):
+                                import datetime as dt
+                                excel_epoch = dt.datetime(1899, 12, 30)
+                                delta = cell_value - excel_epoch
+                                excel_date = delta.days + (delta.seconds / 86400)
+                                all_values[cell_ref] = excel_date
+                            else:
+                                all_values[cell_ref] = cell_value
+                
+                # Collect all cells including formula info
+                records = []
+                formula_cells = []
+                
+                for row in range(min_row + 1, max_row + 1):
+                    values = []
+                    formulas = []
+                    cell_refs = []
+                    row_has_data = False
+                    row_has_formula = False
+                    
+                    for col in range(min_col, max_col + 1):
+                        # Get both formula and value versions
+                        cell_formula = ws_formulas.cell(row, col)
+                        cell_value = ws_values.cell(row, col)
+                        cell_ref = f"{get_column_letter(col)}{row}"
+                        cell_refs.append(cell_ref)
+                        
+                        # Check if cell has formula
+                        has_formula = cell_formula.data_type == 'f' if hasattr(cell_formula, 'data_type') else False
+                        formula = cell_formula.value if has_formula else None
+                        
+                        # Get calculated value
+                        value = cell_value.value
+                        
+                        # Convert datetime objects to ISO format for JSON serialization
+                        if isinstance(value, datetime):
+                            value = value.isoformat()
+                        
+                        # If openpyxl couldn't calculate the formula value, try with formulas library
+                        if has_formula and (value is None) and has_formula_engine and formula:
+                            try:
+                                # Try to evaluate the formula using all collected context values
+                                eval_result = evaluate_excel_formula(formula, all_values)
+                                if eval_result.get("success", False):
+                                    value = eval_result["value"]
+                                    
+                                    # If value is numpy array or other complex type, convert to Python native type
+                                    try:
+                                        import numpy as np
+                                        if isinstance(value, np.ndarray):
+                                            value = value.item()
+                                    except (ImportError, AttributeError, Exception):
+                                        try:
+                                            value = float(value)
+                                        except (TypeError, ValueError):
+                                            try:
+                                                value = str(value)
+                                            except Exception:
+                                                value = None
+                            except Exception as e:
+                                logger.warning(f"Error evaluating formula in {cell_ref}: {str(e)}")
+                        
+                        # Store formula info for cells with formulas
+                        if has_formula:
+                            # Try to manually calculate simple formulas like D*E or F*0.25
+                            if formula and formula.startswith("="):
+                                # First check for simple multiplication with a constant
+                                if "*" in formula and formula.count("*") == 1 and any(c.isdigit() for c in formula):
+                                    try:
+                                        # Extract the parts of the formula
+                                        parts = formula[1:].split("*")
+                                        
+                                        # Check if one part is a cell reference and the other is a number
+                                        cell_ref_part = None
+                                        number_part = None
+                                        
+                                        for part in parts:
+                                            part = part.strip()
+                                            # Check if part looks like a cell reference
+                                            if any(c.isalpha() for c in part) and any(c.isdigit() for c in part):
+                                                cell_ref_part = part
+                                            # Check if part is a number
+                                            elif part.replace('.', '', 1).isdigit():
+                                                number_part = part
+                                                
+                                        # If we have both parts, get the cell value and calculate
+                                        if cell_ref_part and number_part:
+                                            cell_value = all_values.get(cell_ref_part)
+                                            
+                                            if cell_value is not None:
+                                                try:
+                                                    cell_value = float(cell_value)
+                                                    number_value = float(number_part)
+                                                    manually_calculated = cell_value * number_value
+                                                    value = manually_calculated
+                                                except (ValueError, TypeError):
+                                                    pass
+                                        # Otherwise try the D*E pattern for two cell references
+                                        elif "*" in formula and formula.count("*") == 1:
+                                            # Try the cell reference pattern like D2*E2
+                                            cell_refs_in_formula = formula[1:].split("*")
+                                            if len(cell_refs_in_formula) == 2:
+                                                ref1, ref2 = cell_refs_in_formula
+                                                
+                                                # Get values directly - handle both D*E pattern and D2*E2 pattern
+                                                cell1_val = None
+                                                cell2_val = None
+                                                
+                                                # For D2*E2 pattern, extract row and column
+                                                if any(c.isdigit() for c in ref1) and any(c.isdigit() for c in ref2):
+                                                    # First get values from our context
+                                                    cell1_val = all_values.get(ref1)
+                                                    cell2_val = all_values.get(ref2)
+                                                else:
+                                                    # For D*E pattern in the current row, look up values
+                                                    # Extract column letter from each reference
+                                                    col1_letter = ''.join(c for c in ref1 if c.isalpha())
+                                                    col2_letter = ''.join(c for c in ref2 if c.isalpha())
+                                                    
+                                                    # Get cell references for current row
+                                                    new_ref1 = f"{col1_letter}{row}"
+                                                    new_ref2 = f"{col2_letter}{row}"
+                                                    
+                                                    # Get values
+                                                    cell1_val = all_values.get(new_ref1)
+                                                    cell2_val = all_values.get(new_ref2)
+                                                
+                                                # Calculate if we have both values
+                                                if cell1_val is not None and cell2_val is not None:
+                                                    try:
+                                                        cell1_val = float(cell1_val)
+                                                        cell2_val = float(cell2_val)
+                                                        manually_calculated = cell1_val * cell2_val
+                                                        value = manually_calculated
+                                                    except (ValueError, TypeError):
+                                                        pass
+                                    except Exception as calc_error:
+                                        logger.warning(f"Error calculating formula: {calc_error}")
+                            
+                            formula_cells.append({
+                                "cell": cell_ref,
+                                "formula": formula,
+                                "calculated_value": value
+                            })
+                            row_has_formula = True
+                        
+                        # Append value to the row data
+                        values.append(value)
+                        formulas.append(formula)
+                        
+                        if value is not None and value != "" or has_formula:
+                            row_has_data = True
+                    
+                    if row_has_data:
+                        record = {
+                            "row": row,
+                            "values": values,
+                            "cell_refs": cell_refs,
+                        }
+                        
+                        # Only include formulas when they exist
+                        if row_has_formula:
+                            record["formulas"] = formulas
+                            
+                        records.append(record)
+                
+                # Count charts and images
+                chart_count = len([drawing for drawing in ws_values._charts])
+                image_count = len([drawing for drawing in ws_values._images])
+                
+                # Prepare sheet data
+                sheet_data = {
+                    "sheet_name": sheet_name,
+                    "dimensions": cell_range or ws_formulas.calculate_dimension(),
+                    "non_empty_cells": len(records),
+                    "charts": chart_count,
+                    "images": image_count,
+                    "columns": columns,
+                    "column_refs": [get_column_letter(col) for col in range(min_col, max_col + 1)],
+                    "records": records,
+                    "has_formulas": len(formula_cells) > 0,
+                    "formula_cells": formula_cells
+                }
+                
+                # Add sheet data to response
+                file_info["sheet"] = sheet_data
+                file_info["success"] = True
+        
+        # Handle requested sheet not found
+        if sheet_name and not file_info.get("sheet"):
+            return {
+                "success": False,
+                "error": f"Sheet '{sheet_name}' not found in workbook"
+            }
+            
+        # Clean up
+        workbook_formulas.close()
+        workbook_values.close()
+        
+        return file_info
+        
+    except Exception as e:
+        logger.error(f"Failed to read Excel with formulas: {e}")
+        return {
+            "success": False,
+            "error": f"Failed to read Excel file: {str(e)}"
+        }

@@ -786,7 +786,7 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "condition": {
                         "type": "string",
-                        "description": "Condition for formatting with full support for complex expressions:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\" (not equal to zero)\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\"\n- Compound examples:\n  * \">50 AND <=70\" (values between 50-70)\n  * \"<20 OR >80\" (values below 20 or above 80)\n  * \"CONTAINS('Pass') OR =ISBLANK()\" (cells containing 'Pass' or empty cells)\n  * \"<>ISBLANK() AND STARTS_WITH('Q')\" (non-empty cells starting with 'Q')"
+                        "description": "Condition for formatting with full support for complex expressions:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\" (not equal to zero)\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\", \"REGEX('pattern')\"\n- Date: \">DATE(2023,1,1)\", \"<=TODAY()\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\", \"ISBLANK()\", \"NOTBLANK()\"\n- Column references: \">{F}\" (compare with column F), \"<=2*{C}\" (compare with twice value in column C)\n- Named columns: \">{profit}\" (when using compare_columns parameter)\n- Compound examples:\n  * \">50 AND <=70\" (values between 50-70)\n  * \"<20 OR >80\" (values below 20 or above 80)\n  * \"CONTAINS('Pass') OR =ISBLANK()\" (cells containing 'Pass' or empty cells)\n  * \"<>ISBLANK() AND STARTS_WITH('Q')\" (non-empty cells starting with 'Q')\n  * \">{F} AND <100\" (greater than value in column F but less than 100)"
                     },
                     "condition_column": {
                         "type": "string",
@@ -804,6 +804,34 @@ def get_tool_definitions() -> list[types.Tool]:
                         "items": {
                             "type": "string"
                         },
+                        "default": None
+                    },
+                    "handle_formulas": {
+                        "type": "boolean",
+                        "description": "Whether to evaluate formulas for condition checking. When true, formula cells will be evaluated using their calculated values.",
+                        "default": True
+                    },
+                    "outside_range_columns": {
+                        "type": "array",
+                        "description": "Optional list of columns outside the main range to format when condition is met (e.g., ['G', 'H']). Useful for formatting columns that aren't part of the condition range.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": None
+                    },
+                    "compare_columns": {
+                        "type": "object",
+                        "description": "Optional mapping of column names to actual column letters for use in conditions. Example: {\"profit\": \"F\", \"sales\": \"C\"} lets you use {profit} and {sales} in conditions.",
+                        "default": None
+                    },
+                    "date_format": {
+                        "type": "string",
+                        "description": "Optional date format string for parsing date values in conditions (e.g., \"%Y-%m-%d\" for YYYY-MM-DD format).",
+                        "default": None
+                    },
+                    "icon_set": {
+                        "type": "string",
+                        "description": "Optional icon set to apply ('3arrows', '3trafficlights', '3symbols', '3stars', etc.). Note: This is a simplified implementation and may have limitations.",
                         "default": None
                     },
                     "bold": {

@@ -1620,6 +1620,11 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             condition_column = arguments.get("condition_column")
             format_entire_row = arguments.get("format_entire_row", False)
             columns_to_format = arguments.get("columns_to_format")
+            handle_formulas = arguments.get("handle_formulas", True)
+            outside_range_columns = arguments.get("outside_range_columns")
+            compare_columns = arguments.get("compare_columns")
+            date_format = arguments.get("date_format")
+            icon_set = arguments.get("icon_set")
 
             # If path doesn't exist, try to find it in allowed directories
             if not os.path.exists(path):
@@ -1643,16 +1648,23 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
                     )
                 ]
                 
-            # Apply conditional formatting
+            # Apply conditional formatting with enhanced parameters
             result = apply_conditional_formatting(
                 path, sheet_name, cell_range, condition,
                 bold, italic, font_size, font_color, bg_color,
                 alignment, wrap_text, border_style, condition_column, 
-                format_entire_row, columns_to_format
+                format_entire_row, columns_to_format, handle_formulas,
+                outside_range_columns, compare_columns, date_format, icon_set
             )
             
             if result["success"]:
-                return [types.TextContent(type="text", text=result["message"])]
+                response_text = result["message"]
+                
+                # Add additional information if available
+                if "icon_set_message" in result:
+                    response_text += f"\n\n{result['icon_set_message']}"
+                
+                return [types.TextContent(type="text", text=response_text)]
             else:
                 return [types.TextContent(type="text", text=result["error"])]
 

@@ -156,6 +156,35 @@ from resources.excel_tools import (
     add_data_validation,
     apply_conditional_formatting,
     read_excel_with_formulas,
+    evaluate_excel_formula
+)
+
+# Import new table and pivot table tools
+from resources.excel_table_pivot_tools import (
+    create_excel_table,
+    sort_excel_table,
+    filter_excel_table,
+    create_pivot_table,
+    modify_pivot_table_fields,
+    sort_pivot_table_field,
+    filter_pivot_table_items,
+    set_pivot_table_value_field_calculation,
+    refresh_pivot_table,
+    add_pivot_table_calculated_field,
+    add_pivot_table_calculated_item,
+    create_pivot_table_slicer,
+    modify_pivot_table_slicer,
+    set_pivot_table_layout,
+    configure_pivot_table_totals,
+    format_pivot_table_part,
+    change_pivot_table_data_source,
+    group_pivot_field_items,
+    ungroup_pivot_field_items,
+    apply_pivot_table_conditional_formatting,
+    create_timeline_slicer,
+    connect_slicer_to_pivot_tables,
+    setup_power_pivot_data_model,
+    create_power_pivot_measure
 )
 
 # Initialize allowed directories list - will be populated with command-line arguments
@@ -1668,8 +1697,461 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             else:
                 return [types.TextContent(type="text", text=result["error"])]
 
-        # Unknown tool
-        return [types.TextContent(type="text", text=f"Unknown tool: {tool_name}")]
+        # --- Excel Table Tool Implementations ---
+        elif tool_name == "create_excel_table":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            data_range = arguments["data_range"]
+            table_name = arguments["table_name"]
+            table_style = arguments.get("table_style", "TableStyleMedium9")
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = create_excel_table(path, sheet_name, data_range, table_name, table_style)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "sort_excel_table":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            table_name = arguments["table_name"]
+            sort_column_name = arguments["sort_column_name"]
+            sort_order = arguments.get("sort_order", "ascending")
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = sort_excel_table(path, sheet_name, table_name, sort_column_name, sort_order)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "filter_excel_table":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            table_name = arguments["table_name"]
+            column_name = arguments["column_name"]
+            criteria1 = arguments["criteria1"]
+            operator = arguments.get("operator", "equals")
+            criteria2 = arguments.get("criteria2")
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = filter_excel_table(path, sheet_name, table_name, column_name, criteria1, operator, criteria2)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        # --- PivotTable Tool Implementations ---
+        elif tool_name == "create_pivot_table":
+            path = arguments["path"]
+            source_sheet_name = arguments["source_sheet_name"]
+            source_data_range = arguments["source_data_range"]
+            target_sheet_name = arguments["target_sheet_name"]
+            target_cell_address = arguments["target_cell_address"]
+            pivot_table_name = arguments["pivot_table_name"]
+            row_fields = arguments.get("row_fields")
+            column_fields = arguments.get("column_fields")
+            value_fields = arguments.get("value_fields")
+            filter_fields = arguments.get("filter_fields")
+            pivot_style = arguments.get("pivot_style", "PivotStyleMedium9")
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+            
+            result = create_pivot_table(
+                filepath=path, 
+                source_sheet_name=source_sheet_name, 
+                source_data_range=source_data_range,
+                target_sheet_name=target_sheet_name, 
+                target_cell_address=target_cell_address, 
+                pivot_table_name=pivot_table_name,
+                row_fields=row_fields, 
+                column_fields=column_fields, 
+                value_fields=value_fields, 
+                filter_fields=filter_fields, 
+                pivot_style=pivot_style
+            )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "modify_pivot_table_fields":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            pivot_table_name = arguments["pivot_table_name"]
+            add_row_fields = arguments.get("add_row_fields")
+            add_column_fields = arguments.get("add_column_fields")
+            add_value_fields = arguments.get("add_value_fields")
+            add_filter_fields = arguments.get("add_filter_fields")
+            remove_fields = arguments.get("remove_fields")
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = modify_pivot_table_fields(
+                filepath=path, 
+                sheet_name=sheet_name, 
+                pivot_table_name=pivot_table_name,
+                add_row_fields=add_row_fields, 
+                add_column_fields=add_column_fields,
+                add_value_fields=add_value_fields, 
+                add_filter_fields=add_filter_fields, 
+                remove_fields=remove_fields
+            )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "sort_pivot_table_field":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            pivot_table_name = arguments["pivot_table_name"]
+            field_name = arguments["field_name"]
+            sort_on_field = arguments["sort_on_field"]
+            sort_order = arguments.get("sort_order", "ascending")
+            sort_type = arguments.get("sort_type", "data")
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = sort_pivot_table_field(path, sheet_name, pivot_table_name, field_name, sort_on_field, sort_order, sort_type)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "filter_pivot_table_items":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            pivot_table_name = arguments["pivot_table_name"]
+            field_name = arguments["field_name"]
+            visible_items = arguments.get("visible_items")
+            hidden_items = arguments.get("hidden_items")
+            # filter_type = arguments.get("filter_type", "value") # For future expansion
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = filter_pivot_table_items(path, sheet_name, pivot_table_name, field_name, visible_items, hidden_items)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "refresh_pivot_table":
+            path = arguments["path"]
+            sheet_name = arguments["sheet_name"]
+            pivot_table_name = arguments["pivot_table_name"]
+
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}'")]
+            
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]: return [types.TextContent(type="text", text=f"Access denied: {security_check['message']}")]
+
+            result = refresh_pivot_table(path, sheet_name, pivot_table_name)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "set_pivot_table_value_field_calculation":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+            
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = set_pivot_table_value_field_calculation(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "group_pivot_field_items":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = group_pivot_field_items(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "ungroup_pivot_field_items":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = ungroup_pivot_field_items(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "apply_pivot_table_conditional_formatting":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = apply_pivot_table_conditional_formatting(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "configure_pivot_table_totals":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = configure_pivot_table_totals(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "format_pivot_table_part":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+            
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = format_pivot_table_part(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif tool_name == "change_pivot_table_data_source":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path # Ensure 'filepath' is used as the parameter name
+            arguments.pop("path", None) # Remove original 'path'
+
+            result = change_pivot_table_data_source(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "add_pivot_table_calculated_field":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = add_pivot_table_calculated_field(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "add_pivot_table_calculated_item":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = add_pivot_table_calculated_item(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "set_pivot_table_layout":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = set_pivot_table_layout(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "create_pivot_table_slicer":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = create_pivot_table_slicer(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "modify_pivot_table_slicer":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = modify_pivot_table_slicer(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "create_timeline_slicer":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = create_timeline_slicer(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "connect_slicer_to_pivot_tables":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = connect_slicer_to_pivot_tables(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "setup_power_pivot_data_model":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = setup_power_pivot_data_model(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+            
+        elif tool_name == "create_power_pivot_measure":
+            path = arguments.get("path")
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path: path = found_path
+                else: return [types.TextContent(type="text", text=f"Could not find Excel file '{path}' in allowed directories.")]
+
+            security_check_result = check_path_security(allowed_directories, path)
+            if not security_check_result["is_allowed"]:
+                return [types.TextContent(type="text", text=f"Access denied: {security_check_result['message']}")]
+            
+            arguments["filepath"] = path
+            arguments.pop("path", None)
+
+            result = create_power_pivot_measure(**arguments)
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+        # --- END ADVANCED PIVOTTABLE TOOL HANDLERS ---
+
+        else:
+            return [types.TextContent(type="text", text=f"Unknown tool: {tool_name}")]
 
     except Exception as e:
         return [types.TextContent(type="text", text=f"Error: {str(e)}")]

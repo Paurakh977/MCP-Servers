@@ -46,7 +46,7 @@ def _check_dependencies_for_pivot_tables() -> bool:
         logger.warning("openpyxl is recommended for full Excel integration.")
     return True
 
-def _get_excel_app_and_workbook(filepath: str, visible: bool = True) -> Tuple[Optional["xw.App"], Optional["xw.Book"]]:
+def _get_excel_app_and_workbook(filepath: str, visible: bool = False) -> Tuple[Optional["xw.App"], Optional["xw.Book"]]:
     """Starts an Excel application instance and opens the workbook."""
     if not HAS_XLWINGS:
         return None, None

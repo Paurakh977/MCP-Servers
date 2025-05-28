@@ -11,6 +11,7 @@ import json
 import time
 from datetime import datetime
 
+
 # checking some crusial imports because in the client config file the env might not have the following dependencies
 try:
     import PyPDF2
@@ -186,6 +187,8 @@ from resources.excel_table_pivot_tools import (
     setup_power_pivot_data_model,
     create_power_pivot_measure
 )
+
+from resources.excel_charts_pivot_tools import ExcelChartsCore, create_dashboard_charts
 
 # Initialize allowed directories list - will be populated with command-line arguments
 allowed_directories = [os.getcwd()]  # Default to current directory
@@ -2150,8 +2153,425 @@ async def call_tool(tool_name: str, arguments: dict) -> list[types.TextContent]:
             return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
         # --- END ADVANCED PIVOTTABLE TOOL HANDLERS ---
 
+        elif tool_name == "create_pivot_chart":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            source_type = arguments["source_type"]
+            chart_type = arguments.get("chart_type", "COLUMN")
+            chart_title = arguments.get("chart_title")
+            position = arguments.get("position", [100, 100])
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                # Open workbook
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                result = {}
+                
+                if source_type == "pivot_table":
+                    # Create chart from existing pivot table
+                    pivot_table_name = arguments.get("pivot_table_name")
+                    if not pivot_table_name:
+                        return [types.TextContent(type="text", text="pivot_table_name is required for 'pivot_table' source type")]
+                    
+                    result = core.create_pivot_chart_from_table(
+                        pivot_table_name=pivot_table_name,
+                        chart_type=chart_type,
+                        chart_title=chart_title,
+                        position=tuple(position)
+                    )
+                
+                elif source_type == "data_range":
+                    # Create chart directly from data range
+                    data_range = arguments.get("data_range")
+                    if not data_range:
+                        return [types.TextContent(type="text", text="data_range is required for 'data_range' source type")]
+                    
+                    result = core.create_chart_from_range(
+                        data_range=data_range,
+                        chart_type=chart_type,
+                        chart_title=chart_title,
+                        position=tuple(position)
+                    )
+                
+                elif source_type == "new_pivot":
+                    # Create new pivot table then chart
+                    data_range = arguments.get("data_range")
+                    pivot_config = arguments.get("pivot_config", {})
+                    
+                    if not data_range:
+                        return [types.TextContent(type="text", text="data_range is required for 'new_pivot' source type")]
+                    if not pivot_config:
+                        return [types.TextContent(type="text", text="pivot_config is required for 'new_pivot' source type")]
+                    
+                    # Create pivot table first
+                    pt_name = f"PivotTable_{int(time.time())}"
+                    pt_result = core.create_pivot_table(
+                        data_range=data_range,
+                        pivot_table_name=pt_name,
+                        destination=pivot_config.get("destination", "H1"),
+                        row_fields=pivot_config.get("row_fields", []),
+                        column_fields=pivot_config.get("column_fields", []),
+                        value_fields=pivot_config.get("value_fields", [])
+                    )
+                    
+                    if pt_result["status"] != "success":
+                        return [types.TextContent(type="text", text=f"Failed to create pivot table: {pt_result.get('message', 'Unknown error')}")]
+                    
+                    # Create chart from new pivot table
+                    result = core.create_pivot_chart_from_table(
+                        pivot_table_name=pt_name,
+                        chart_type=chart_type,
+                        chart_title=chart_title,
+                        position=tuple(position)
+                    )
+                
+                return [types.TextContent(type="text", text=f"✅ Pivot chart creation result:\n{json.dumps(result, indent=2)}")]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # MANAGE CHART ELEMENTS TOOL
+        elif tool_name == "manage_chart_elements":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            chart_name = arguments["chart_name"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                results = []
+                
+                # Handle title configuration
+                if "title_config" in arguments:
+                    title_config = arguments["title_config"]
+                    result = core.set_chart_title(
+                        chart_name=chart_name,
+                        title=title_config.get("title_text", ""),
+                        show_title=title_config.get("show_title", True)
+                    )
+                    results.append(f"Title: {result}")
+                
+                # Handle axis configuration
+                if "axis_config" in arguments:
+                    axis_config = arguments["axis_config"]
+                    if "x_axis_title" in axis_config:
+                        result = core.set_axis_title(
+                            chart_name=chart_name,
+                            axis_type="X",
+                            title=axis_config["x_axis_title"],
+                            show_title=axis_config.get("show_x_title", True)
+                        )
+                        results.append(f"X-axis: {result}")
+                    
+                    if "y_axis_title" in axis_config:
+                        result = core.set_axis_title(
+                            chart_name=chart_name,
+                            axis_type="Y",
+                            title=axis_config["y_axis_title"],
+                            show_title=axis_config.get("show_y_title", True)
+                        )
+                        results.append(f"Y-axis: {result}")
+                
+                # Handle legend configuration
+                if "legend_config" in arguments:
+                    legend_config = arguments["legend_config"]
+                    result = core.set_legend_properties(
+                        chart_name=chart_name,
+                        show_legend=legend_config.get("show_legend", True),
+                        position=legend_config.get("position", "RIGHT")
+                    )
+                    results.append(f"Legend: {result}")
+                
+                # Handle data labels
+                if "data_labels" in arguments:
+                    data_labels = arguments["data_labels"]
+                    result = core.toggle_data_labels(
+                        chart_name=chart_name,
+                        show_labels=data_labels.get("show_labels", False),
+                        series_index=data_labels.get("series_index", 1)
+                    )
+                    results.append(f"Data labels: {result}")
+                
+                # Handle gridlines
+                if "gridlines" in arguments:
+                    gridlines = arguments["gridlines"]
+                    for axis, major in [("X", True), ("X", False), ("Y", True), ("Y", False)]:
+                        key = f"{axis.lower()}_{'major' if major else 'minor'}"
+                        if key in gridlines:
+                            result = core.toggle_gridlines(
+                                chart_name=chart_name,
+                                axis_type=axis,
+                                major=major,
+                                show=gridlines[key]
+                            )
+                            results.append(f"Gridlines {axis} {'major' if major else 'minor'}: {result}")
+                
+                return [types.TextContent(type="text", text=f"✅ Chart elements management results:\n" + "\n".join(results))]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # APPLY CHART STYLING TOOL
+        elif tool_name == "apply_chart_styling":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            chart_name = arguments["chart_name"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                results = []
+                
+                # Apply style
+                if "style_id" in arguments:
+                    result = core.set_chart_style(chart_name, arguments["style_id"])
+                    results.append(f"Style: {result}")
+                
+                # Apply layout
+                if "layout_id" in arguments:
+                    result = core.apply_chart_layout(chart_name, arguments["layout_id"])
+                    results.append(f"Layout: {result}")
+                
+                # Change chart type
+                if "new_chart_type" in arguments:
+                    result = core.change_chart_type(chart_name, arguments["new_chart_type"])
+                    results.append(f"Chart type: {result}")
+                
+                return [types.TextContent(type="text", text=f"✅ Chart styling results:\n" + "\n".join(results))]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # MANAGE PIVOT FIELDS TOOL
+        elif tool_name == "manage_pivot_fields":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            pivot_table_name = arguments["pivot_table_name"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                results = []
+                
+                # Handle field operations
+                if "field_operations" in arguments:
+                    for field_op in arguments["field_operations"]:
+                        result = core.modify_pivot_fields(
+                            pivot_table_name=pivot_table_name,
+                            field_name=field_op["field_name"],
+                            orientation=field_op["orientation"],
+                            summary_function=field_op.get("summary_function")
+                        )
+                        results.append(f"Field {field_op['field_name']}: {result}")
+                
+                # Handle calculated fields
+                if "calculated_fields" in arguments:
+                    for calc_field in arguments["calculated_fields"]:
+                        result = core.create_calculated_field(
+                            pivot_table_name=pivot_table_name,
+                            field_name=calc_field["field_name"],
+                            formula=calc_field["formula"]
+                        )
+                        results.append(f"Calculated field {calc_field['field_name']}: {result}")
+                
+                return [types.TextContent(type="text", text=f"✅ Pivot fields management results:\n" + "\n".join(results))]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # CREATE COMBO CHART TOOL
+        elif tool_name == "create_combo_chart":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            data_range = arguments["data_range"]
+            primary_series = arguments["primary_series"]
+            secondary_series = arguments["secondary_series"]
+            primary_type = arguments.get("primary_type", "COLUMN")
+            secondary_type = arguments.get("secondary_type", "LINE")
+            chart_title = arguments.get("chart_title")
+            position = arguments.get("position", [100, 100])
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                result = core.create_combo_chart(
+                    chart_name=chart_title or "ComboChart",
+                    data_range=data_range,
+                    primary_series=primary_series,
+                    secondary_series=secondary_series,
+                    primary_type=primary_type,
+                    secondary_type=secondary_type
+                )
+                
+                return [types.TextContent(type="text", text=f"✅ Combo chart creation result:\n{json.dumps(result, indent=2)}")]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # ADD CHART FILTERS TOOL
+        elif tool_name == "add_chart_filters":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            pivot_table_name = arguments["pivot_table_name"]
+            slicer_fields = arguments["slicer_fields"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                results = []
+                for slicer_field in slicer_fields:
+                    field_name = slicer_field["field_name"]
+                    position = slicer_field.get("position", [500, 100])
+                    
+                    result = core.add_slicer(
+                        pivot_table_name=pivot_table_name,
+                        field_name=field_name,
+                        position=tuple(position)
+                    )
+                    results.append(f"Slicer {field_name}: {result}")
+                
+                return [types.TextContent(type="text", text=f"✅ Chart filters (slicers) results:\n" + "\n".join(results))]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # REFRESH AND UPDATE TOOL
+        elif tool_name == "refresh_and_update":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            operation = arguments["operation"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                if operation == "refresh_all":
+                    result = core.refresh_pivot_data()
+                
+                elif operation == "refresh_pivot":
+                    pivot_table_name = arguments.get("pivot_table_name")
+                    if not pivot_table_name:
+                        return [types.TextContent(type="text", text="pivot_table_name is required for 'refresh_pivot' operation")]
+                    result = core.refresh_pivot_data(pivot_table_name)
+                
+                elif operation == "update_chart_source":
+                    chart_name = arguments.get("chart_name")
+                    new_data_range = arguments.get("new_data_range")
+                    if not chart_name or not new_data_range:
+                        return [types.TextContent(type="text", text="chart_name and new_data_range are required for 'update_chart_source' operation")]
+                    result = core.update_chart_data_source(chart_name, new_data_range)
+                
+                else:
+                    return [types.TextContent(type="text", text=f"Unknown operation: {operation}")]
+                
+                return [types.TextContent(type="text", text=f"✅ Refresh/update result:\n{json.dumps(result, indent=2)}")]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # EXPORT AND DISTRIBUTE TOOL
+        elif tool_name == "export_and_distribute":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            operation = arguments["operation"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                if operation == "export_chart":
+                    chart_name = arguments.get("chart_name")
+                    export_path = arguments.get("export_path")
+                    file_format = arguments.get("file_format", "PNG")
+                    
+                    if not chart_name or not export_path:
+                        return [types.TextContent(type="text", text="chart_name and export_path are required for 'export_chart' operation")]
+                    
+                    result = core.export_chart(chart_name, export_path, file_format)
+                    return [types.TextContent(type="text", text=f"✅ Chart export result:\n{json.dumps(result, indent=2)}")]
+                
+                elif operation == "create_dashboard":
+                    dashboard_config = arguments.get("dashboard_config", [])
+                    if not dashboard_config:
+                        return [types.TextContent(type="text", text="dashboard_config is required for 'create_dashboard' operation")]
+                    
+                    result = create_dashboard_charts(workbook_path, dashboard_config)
+                    return [types.TextContent(type="text", text=f"✅ Dashboard creation result:\n{json.dumps(result, indent=2)}")]
+                
+                else:
+                    return [types.TextContent(type="text", text=f"Unknown operation: {operation}")]
+                
+            finally:
+                core.close_workbook(save=True)
+
+        # GET CHART INFO TOOL
+        elif tool_name == "get_chart_info":
+            workbook_path = get_validated_path(arguments["workbook_path"])
+            info_type = arguments["info_type"]
+            sheet_name = arguments.get("sheet_name")
+            
+            core = ExcelChartsCore()
+            try:
+                wb_result = core.open_workbook(workbook_path, sheet_name)
+                if wb_result["status"] != "success":
+                    return [types.TextContent(type="text", text=f"Failed to open workbook: {wb_result.get('message', 'Unknown error')}")]
+                
+                if info_type == "list_charts":
+                    result = core.list_all_charts()
+                
+                elif info_type == "list_pivot_tables":
+                    result = core.list_pivot_tables()
+                
+                elif info_type == "chart_details":
+                    chart_name = arguments.get("chart_name")
+                    if not chart_name:
+                        return [types.TextContent(type="text", text="chart_name is required for 'chart_details' info type")]
+                    result = core.get_chart_info(chart_name)
+                
+                elif info_type == "workbook_overview":
+                    charts_result = core.list_all_charts()
+                    pivot_result = core.list_pivot_tables()
+                    result = {
+                        "status": "success",
+                        "workbook": wb_result["workbook"],
+                        "sheets": wb_result["sheets"],
+                        "charts": charts_result.get("charts", []),
+                        "pivot_tables": pivot_result.get("pivot_tables", [])
+                    }
+                
+                else:
+                    return [types.TextContent(type="text", text=f"Unknown info_type: {info_type}")]
+                
+                return [types.TextContent(type="text", text=f"📊 Chart information:\n{json.dumps(result, indent=2)}")]
+                
+            finally:
+                core.close_workbook(save=False)
+       
         else:
             return [types.TextContent(type="text", text=f"Unknown tool: {tool_name}")]
+        
 
     except Exception as e:
         return [types.TextContent(type="text", text=f"Error: {str(e)}")]
@@ -2176,6 +2596,26 @@ async def main() -> None:
             initialization_options=server.create_initialization_options(),
         )
 
+def get_validated_path(path: str) -> str:
+            if not os.path.exists(path):
+                found_path = find_file_in_allowed_dirs(path, allowed_directories)
+                if found_path:
+                    print(f"Found Excel file at: {found_path}", file=sys.stderr)
+                    return found_path
+                else:
+                    raise FileNotFoundError(f"Could not find Excel file matching '{path}' in allowed directories: {allowed_directories}")
+            
+            # Verify path security
+            security_check = check_path_security(allowed_directories, path)
+            if not security_check["is_allowed"]:
+                raise PermissionError(f"Access denied: {security_check['message']}")
+            
+            # Verify file is Excel format
+            file_extension = os.path.splitext(path)[1].lower()
+            if file_extension not in ['.xlsx', '.xlsm', '.xls']:
+                raise ValueError(f"Not an Excel file: {path}")
+            
+            return path
 
 if __name__ == "__main__":
     asyncio.run(main())

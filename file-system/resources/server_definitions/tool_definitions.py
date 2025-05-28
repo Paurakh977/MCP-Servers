@@ -1551,6 +1551,504 @@ def get_tool_definitions() -> list[types.Tool]:
                 },
                 "required": ["path", "measure_name", "dax_formula", "table_name"]
             }
+        ),
+        
+        # --- PIVOTCHART TOOL DEFINITIONS ---
+        
+        types.Tool(
+            name="create_pivot_chart",
+            description="Create pivot charts from various data sources with full automation. This is your go-to tool for creating "
+                       "professional pivot charts from either existing pivot tables, data ranges, or by creating new pivot tables. "
+                       "Supports all major chart types (column, bar, line, pie, combo) with automatic styling and formatting. "
+                       "Perfect for transforming raw data into insightful visualizations instantly.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["pivot_table", "data_range", "new_pivot"],
+                        "description": "Data source type: 'pivot_table' for existing pivot table, 'data_range' for direct chart from range, 'new_pivot' to create pivot table first then chart"
+                    },
+                    "data_range": {
+                        "type": "string",
+                        "description": "Excel range (e.g., 'A1:D100') - required for 'data_range' and 'new_pivot' source types"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Name of existing pivot table - required for 'pivot_table' source type"
+                    },
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["COLUMN", "BAR", "LINE", "PIE", "AREA", "DOUGHNUT", "COMBO", "COLUMN_STACKED", "BAR_STACKED", "LINE_MARKERS", "SCATTER"],
+                        "default": "COLUMN",
+                        "description": "Type of chart to create. Choose based on your data visualization needs."
+                    },
+                    "chart_title": {
+                        "type": "string",
+                        "description": "Title for the chart. If not provided, chart will have no title."
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "default": [100, 100],
+                        "description": "Chart position as [x, y] coordinates in pixels from top-left corner"
+                    },
+                    "pivot_config": {
+                        "type": "object",
+                        "properties": {
+                            "row_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Fields to use as row categories in pivot table"
+                            },
+                            "column_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Fields to use as column categories in pivot table"
+                            },
+                            "value_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Fields to use as values/measures in pivot table"
+                            },
+                            "destination": {
+                                "type": "string",
+                                "default": "H1",
+                                "description": "Where to place the pivot table (e.g., 'H1' or 'Sheet2!A1')"
+                            }
+                        },
+                        "description": "Pivot table configuration - required for 'new_pivot' source type"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name to work with. If not provided, uses active sheet."
+                    }
+                },
+                "required": ["workbook_path", "source_type"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="manage_chart_elements",
+            description="Comprehensive chart formatting and element management tool. Control every aspect of your chart's appearance "
+                       "including titles, legends, data labels, gridlines, and axis formatting. This tool handles all visual "
+                       "customization needs to make your charts presentation-ready with professional styling.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook containing the chart"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name of the chart to modify. Use 'list_charts' tool first if you don't know the name."
+                    },
+                    "title_config": {
+                        "type": "object",
+                        "properties": {
+                            "show_title": {"type": "boolean", "default": True},
+                            "title_text": {"type": "string", "description": "Chart title text"}
+                        },
+                        "description": "Chart title configuration"
+                    },
+                    "axis_config": {
+                        "type": "object",
+                        "properties": {
+                            "x_axis_title": {"type": "string", "description": "X-axis title"},
+                            "y_axis_title": {"type": "string", "description": "Y-axis title"},
+                            "show_x_title": {"type": "boolean", "default": True},
+                            "show_y_title": {"type": "boolean", "default": True}
+                        },
+                        "description": "Axis titles configuration"
+                    },
+                    "legend_config": {
+                        "type": "object",
+                        "properties": {
+                            "show_legend": {"type": "boolean", "default": True},
+                            "position": {
+                                "type": "string",
+                                "enum": ["RIGHT", "LEFT", "TOP", "BOTTOM", "CORNER"],
+                                "default": "RIGHT",
+                                "description": "Legend position"
+                            }
+                        },
+                        "description": "Legend configuration"
+                    },
+                    "data_labels": {
+                        "type": "object",
+                        "properties": {
+                            "show_labels": {"type": "boolean", "default": False},
+                            "series_index": {"type": "integer", "default": 1, "description": "Which series to apply labels to (1-based)"}
+                        },
+                        "description": "Data labels configuration"
+                    },
+                    "gridlines": {
+                        "type": "object",
+                        "properties": {
+                            "x_major": {"type": "boolean", "description": "Show X-axis major gridlines"},
+                            "x_minor": {"type": "boolean", "description": "Show X-axis minor gridlines"},
+                            "y_major": {"type": "boolean", "description": "Show Y-axis major gridlines"},
+                            "y_minor": {"type": "boolean", "description": "Show Y-axis minor gridlines"}
+                        },
+                        "description": "Gridlines configuration"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name if chart is on particular sheet"
+                    }
+                },
+                "required": ["workbook_path", "chart_name"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="apply_chart_styling",
+            description="Apply professional styling and layouts to charts instantly. Transform basic charts into polished, "
+                       "corporate-ready visualizations using Excel's built-in styles and layouts. Also supports dynamic "
+                       "chart type changes for different data presentation needs. Perfect for creating consistent, branded charts.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook containing the chart"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name of the chart to style"
+                    },
+                    "style_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 48,
+                        "description": "Excel chart style ID (1-48). Different IDs provide different color schemes and formatting."
+                    },
+                    "layout_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 11,
+                        "description": "Excel chart layout ID (1-11). Controls overall chart element arrangement and design."
+                    },
+                    "new_chart_type": {
+                        "type": "string",
+                        "enum": ["COLUMN", "BAR", "LINE", "PIE", "AREA", "DOUGHNUT", "COMBO", "COLUMN_STACKED", "BAR_STACKED", "LINE_MARKERS", "SCATTER"],
+                        "description": "Change chart type dynamically. Useful for exploring different data visualizations."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name if chart is on particular sheet"
+                    }
+                },
+                "required": ["workbook_path", "chart_name"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="manage_pivot_fields",
+            description="Advanced pivot table field management and calculated field creation. Dynamically modify pivot table "
+                       "structure by changing field orientations, adding/removing fields, creating calculated fields for "
+                       "complex analysis (like profit margins, ratios, growth rates), and configuring summary functions. "
+                       "Essential for creating sophisticated business intelligence reports.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook containing the pivot table"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Name of the pivot table to modify"
+                    },
+                    "field_operations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Name of the field to modify"},
+                                "orientation": {
+                                    "type": "string",
+                                    "enum": ["ROW", "COLUMN", "DATA", "PAGE", "HIDDEN"],
+                                    "description": "Where to place this field in the pivot table"
+                                },
+                                "summary_function": {
+                                    "type": "string",
+                                    "enum": ["SUM", "COUNT", "AVERAGE", "MAX", "MIN", "PRODUCT"],
+                                    "description": "Summary function for data fields"
+                                }
+                            },
+                            "required": ["field_name", "orientation"]
+                        },
+                        "description": "List of field operations to perform"
+                    },
+                    "calculated_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Name for the calculated field"},
+                                "formula": {"type": "string", "description": "Excel formula for calculation (e.g., '=Sales-Costs' for profit)"}
+                            },
+                            "required": ["field_name", "formula"]
+                        },
+                        "description": "Calculated fields to create for advanced analysis"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name if pivot table is on particular sheet"
+                    }
+                },
+                "required": ["workbook_path", "pivot_table_name"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="create_combo_chart",
+            description="Create sophisticated combination charts that display multiple data series with different chart types "
+                       "on primary and secondary axes. Perfect for comparing different types of metrics (e.g., sales volumes vs. "
+                       "profit percentages, actual vs. targets). Enables complex data storytelling in a single visualization.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "data_range": {
+                        "type": "string",
+                        "description": "Excel range containing the data (e.g., 'A1:E12')"
+                    },
+                    "chart_title": {
+                        "type": "string",
+                        "description": "Title for the combination chart"
+                    },
+                    "primary_series": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Names of data series to display with primary chart type (left axis)"
+                    },
+                    "secondary_series": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Names of data series to display with secondary chart type (right axis)"
+                    },
+                    "primary_type": {
+                        "type": "string",
+                        "enum": ["COLUMN", "BAR", "LINE", "AREA"],
+                        "default": "COLUMN",
+                        "description": "Chart type for primary series"
+                    },
+                    "secondary_type": {
+                        "type": "string",
+                        "enum": ["LINE", "COLUMN", "BAR", "AREA"],
+                        "default": "LINE",
+                        "description": "Chart type for secondary series"
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "default": [100, 100],
+                        "description": "Chart position as [x, y] coordinates"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name to create chart on"
+                    }
+                },
+                "required": ["workbook_path", "data_range", "primary_series", "secondary_series"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="add_chart_filters",
+            description="Add interactive slicers and filters to pivot charts for dynamic data exploration. Create user-friendly "
+                       "filter controls that allow end-users to slice and dice data without technical knowledge. Perfect for "
+                       "building interactive dashboards and self-service analytics solutions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Name of the pivot table to add slicers to"
+                    },
+                    "slicer_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Field to create slicer for"},
+                                "position": {
+                                    "type": "array",
+                                    "items": {"type": "integer"},
+                                    "minItems": 2,
+                                    "maxItems": 2,
+                                    "default": [500, 100],
+                                    "description": "Slicer position as [x, y] coordinates"
+                                }
+                            },
+                            "required": ["field_name"]
+                        },
+                        "description": "List of fields to create slicers for"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name"
+                    }
+                },
+                "required": ["workbook_path", "pivot_table_name", "slicer_fields"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="refresh_and_update",
+            description="Refresh pivot tables, charts, and data connections to ensure all visualizations reflect the latest data. "
+                       "Also supports dynamic data source switching for charts. Essential for maintaining accurate, up-to-date "
+                       "reports and dashboards in live data environments.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["refresh_all", "refresh_pivot", "update_chart_source"],
+                        "description": "Type of refresh/update operation to perform"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Specific pivot table name to refresh (for 'refresh_pivot' operation)"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Chart name for data source update (for 'update_chart_source' operation)"
+                    },
+                    "new_data_range": {
+                        "type": "string",
+                        "description": "New data range for chart (for 'update_chart_source' operation)"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name"
+                    }
+                },
+                "required": ["workbook_path", "operation"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="export_and_distribute",
+            description="Export charts and create multi-chart dashboards for distribution. Save charts as images (PNG, JPG, PDF) "
+                       "for presentations and reports, or create comprehensive dashboard layouts with multiple related charts. "
+                       "Streamlines the process of sharing insights and creating professional reports.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["export_chart", "create_dashboard"],
+                        "description": "Export single chart or create multi-chart dashboard"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name of chart to export (for 'export_chart' operation)"
+                    },
+                    "export_path": {
+                        "type": "string",
+                        "description": "File path for export (for 'export_chart' operation)"
+                    },
+                    "file_format": {
+                        "type": "string",
+                        "enum": ["PNG", "JPG", "JPEG", "GIF", "PDF"],
+                        "default": "PNG",
+                        "description": "Export file format"
+                    },
+                    "dashboard_config": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["pivot", "range"],
+                                    "description": "Chart creation type"
+                                },
+                                "params": {
+                                    "type": "object",
+                                    "description": "Parameters for chart creation"
+                                }
+                            },
+                            "required": ["type", "params"]
+                        },
+                        "description": "Configuration for multiple charts in dashboard (for 'create_dashboard' operation)"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name"
+                    }
+                },
+                "required": ["workbook_path", "operation"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="get_chart_info",
+            description="Retrieve comprehensive information about charts, pivot tables, and data sources in Excel workbooks. "
+                       "Perfect for discovery and analysis of existing Excel files, understanding data structures, and getting "
+                       "chart specifications. Essential for troubleshooting and planning chart modifications.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "info_type": {
+                        "type": "string",
+                        "enum": ["list_charts", "list_pivot_tables", "chart_details", "workbook_overview"],
+                        "description": "Type of information to retrieve"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Specific chart name for detailed information (for 'chart_details' type)"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name to focus on"
+                    }
+                },
+                "required": ["workbook_path", "info_type"],
+                "additionalProperties": False
+            },
+            idempotentHint=True,
+            readOnlyHint=True
         )
-        # --- END ADVANCED PIVOTTABLE TOOL DEFINITIONS ---
     ] 
+
+

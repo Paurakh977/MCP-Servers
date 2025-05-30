@@ -27,7 +27,38 @@ from .excel_tools import (
     apply_excel_formula,
     apply_excel_formula_range,
     validate_excel_formula,
+    apply_conditional_formatting
 )
+
+from .excel_table_pivot_tools import (
+    create_excel_table,
+    sort_excel_table,
+    filter_excel_table,
+    create_pivot_table,
+    modify_pivot_table_fields,
+    sort_pivot_table_field,
+    filter_pivot_table_items,
+    set_pivot_table_value_field_calculation,
+    refresh_pivot_table,
+    add_pivot_table_calculated_field,
+    add_pivot_table_calculated_item,
+    create_pivot_table_slicer,
+    modify_pivot_table_slicer,
+    set_pivot_table_layout,
+    configure_pivot_table_totals,
+    format_pivot_table_part,
+    change_pivot_table_data_source,
+    group_pivot_field_items,
+    ungroup_pivot_field_items,
+    apply_pivot_table_conditional_formatting,
+    create_timeline_slicer,
+    connect_slicer_to_pivot_tables,
+    setup_power_pivot_data_model,
+    create_power_pivot_measure
+)
+
+from .excel_charts_pivot_tools import create_dashboard_charts,ExcelChartsCore
+
 
 __all__ = [
     'extract_file_content',
@@ -60,4 +91,32 @@ __all__ = [
     'apply_excel_formula_range',
     'validate_excel_formula',
     'apply_conditional_formatting',
+    # Pivot and Table tools
+    'create_excel_table',
+    'sort_excel_table',
+    'filter_excel_table',
+    'create_pivot_table',
+    'modify_pivot_table_fields',
+    'sort_pivot_table_field',
+    'filter_pivot_table_items',
+    'set_pivot_table_value_field_calculation',
+    'refresh_pivot_table',
+    'add_pivot_table_calculated_field',
+    'add_pivot_table_calculated_item',
+    'create_pivot_table_slicer',
+    'modify_pivot_table_slicer',
+    'set_pivot_table_layout',
+    'configure_pivot_table_totals',
+    'format_pivot_table_part',
+    'change_pivot_table_data_source',
+    'group_pivot_field_items',
+    'ungroup_pivot_field_items',
+    'apply_pivot_table_conditional_formatting',
+    'create_timeline_slicer',
+    'connect_slicer_to_pivot_tables',
+    'setup_power_pivot_data_model',
+    'create_power_pivot_measure',
+    # Excel Charts tools
+    'ExcelChartsCore',
+    'create_dashboard_charts'
 ] 

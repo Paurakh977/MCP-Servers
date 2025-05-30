@@ -680,7 +680,6 @@ def get_tool_definitions() -> list[types.Tool]:
             idempotentHint=False,
             readOnlyHint=False
         ),
-        # Add the add_excel_column tool definition
         types.Tool(
             name="add_excel_column",
             description="Add a new column to an Excel worksheet without rewriting the entire sheet. This is the preferred way to add a column to existing data, as it preserves all existing content and formatting. You can specify where to insert the column and add data values for the new column.",
@@ -765,7 +764,6 @@ def get_tool_definitions() -> list[types.Tool]:
                 "required": ["path", "sheet_name", "cell_range", "validation_type", "validation_criteria"]
             }
         ),
-        # Update the conditional formatting tool
         types.Tool(
             name="apply_conditional_formatting",
             description="Apply sophisticated conditional formatting to Excel cells based on simple or complex conditions. Supports compound conditions with AND/OR operators that can combine different condition types (numeric, text, blank) in a single rule. This powerful tool efficiently highlights important data patterns without needing to manually filter and format cells.",
@@ -786,7 +784,7 @@ def get_tool_definitions() -> list[types.Tool]:
                     },
                     "condition": {
                         "type": "string",
-                        "description": "Condition for formatting with full support for complex expressions:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\" (not equal to zero)\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\"\n- Compound examples:\n  * \">50 AND <=70\" (values between 50-70)\n  * \"<20 OR >80\" (values below 20 or above 80)\n  * \"CONTAINS('Pass') OR =ISBLANK()\" (cells containing 'Pass' or empty cells)\n  * \"<>ISBLANK() AND STARTS_WITH('Q')\" (non-empty cells starting with 'Q')"
+                        "description": "Condition for formatting with full support for complex expressions:\n- Numeric: \">90\", \"<=50\", \"=100\", \"<>0\" (not equal to zero)\n- Text: \"='Yes'\", \"<>'No'\", \"CONTAINS('text')\", \"STARTS_WITH('A')\", \"REGEX('pattern')\"\n- Date: \">DATE(2023,1,1)\", \"<=TODAY()\"\n- Blank: \"=ISBLANK()\", \"<>ISBLANK()\", \"ISBLANK()\", \"NOTBLANK()\"\n- Column references: \">{F}\" (compare with column F), \"<=2*{C}\" (compare with twice value in column C)\n- Named columns: \">{profit}\" (when using compare_columns parameter)\n- Compound examples:\n  * \">50 AND <=70\" (values between 50-70)\n  * \"<20 OR >80\" (values below 20 or above 80)\n  * \"CONTAINS('Pass') OR =ISBLANK()\" (cells containing 'Pass' or empty cells)\n  * \"<>ISBLANK() AND STARTS_WITH('Q')\" (non-empty cells starting with 'Q')\n  * \">{F} AND <100\" (greater than value in column F but less than 100)"
                     },
                     "condition_column": {
                         "type": "string",
@@ -804,6 +802,34 @@ def get_tool_definitions() -> list[types.Tool]:
                         "items": {
                             "type": "string"
                         },
+                        "default": None
+                    },
+                    "handle_formulas": {
+                        "type": "boolean",
+                        "description": "Whether to evaluate formulas for condition checking. When true, formula cells will be evaluated using their calculated values.",
+                        "default": True
+                    },
+                    "outside_range_columns": {
+                        "type": "array",
+                        "description": "Optional list of columns outside the main range to format when condition is met (e.g., ['G', 'H']). Useful for formatting columns that aren't part of the condition range.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": None
+                    },
+                    "compare_columns": {
+                        "type": "object",
+                        "description": "Optional mapping of column names to actual column letters for use in conditions. Example: {\"profit\": \"F\", \"sales\": \"C\"} lets you use {profit} and {sales} in conditions.",
+                        "default": None
+                    },
+                    "date_format": {
+                        "type": "string",
+                        "description": "Optional date format string for parsing date values in conditions (e.g., \"%Y-%m-%d\" for YYYY-MM-DD format).",
+                        "default": None
+                    },
+                    "icon_set": {
+                        "type": "string",
+                        "description": "Optional icon set to apply ('3arrows', '3trafficlights', '3symbols', '3stars', etc.). Note: This is a simplified implementation and may have limitations.",
                         "default": None
                     },
                     "bold": {
@@ -852,5 +878,1177 @@ def get_tool_definitions() -> list[types.Tool]:
             },
             idempotentHint=False,
             readOnlyHint=False
+        ),
+        # --- Excel Table Tools ---
+        types.Tool(
+            name="create_excel_table",
+            description="Creates a formatted Excel table from a specified data range in a sheet. This structures the data for easier sorting, filtering, and use in PivotTables.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Name of the worksheet containing the data."
+                    },
+                    "data_range": {
+                        "type": "string",
+                        "description": "The range of data to be converted into a table (e.g., 'A1:D100'). Headers should be included in this range."
+                    },
+                    "table_name": {
+                        "type": "string",
+                        "description": "A unique name for the new table."
+                    },
+                    "table_style": {
+                        "type": "string",
+                        "description": "Optional: The style to apply to the table (e.g., 'TableStyleMedium9', 'TableStyleLight1'). Defaults to 'TableStyleMedium9'.",
+                        "default": "TableStyleMedium9"
+                    }
+                },
+                "required": ["path", "sheet_name", "data_range", "table_name"],
+                "additionalProperties": False
+            }
+        ),
+        types.Tool(
+            name="sort_excel_table",
+            description="Sorts an existing Excel table by a specified column and order (ascending/descending).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the table."},
+                    "table_name": {"type": "string", "description": "Name of the table to sort."},
+                    "sort_column_name": {"type": "string", "description": "The header name of the column to sort by."},
+                    "sort_order": {
+                        "type": "string",
+                        "description": "Sort order: 'ascending' or 'descending'.",
+                        "enum": ["ascending", "descending"],
+                        "default": "ascending"
+                    }
+                },
+                "required": ["path", "sheet_name", "table_name", "sort_column_name"],
+                "additionalProperties": False
+            }
+        ),
+        types.Tool(
+            name="filter_excel_table",
+            description="Filters an Excel table based on criteria for a specific column. Supports various operators.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the table."},
+                    "table_name": {"type": "string", "description": "Name of the table to filter."},
+                    "column_name": {"type": "string", "description": "The header name of the column to filter."},
+                    "criteria1": {
+                        "type": "string",
+                        "description": "Primary filter criteria (e.g., a value, a condition like '>100')."
+                    },
+                    "operator": {
+                        "type": "string",
+                        "description": "Filter operator (e.g., 'equals', 'contains', 'beginswith', 'endswith', 'greaterthan', 'lessthan', 'between').",
+                        "enum": ["equals", "contains", "beginswith", "endswith", "greaterthan", "lessthan", "between", "notequals", "doesnotcontain"],
+                        "default": "equals"
+                    },
+                    "criteria2": {
+                        "type": "string",
+                        "description": "Secondary filter criteria, used for 'between' operator.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "table_name", "column_name", "criteria1"],
+                "additionalProperties": False
+            }
+        ),
+        # --- PivotTable Tools ---
+        types.Tool(
+            name="create_pivot_table",
+            description="Creates a new PivotTable from a source data range, allowing specification of rows, columns, values (with summary functions like Sum, Count, Average), and filters. This is a powerful tool for summarizing and analyzing large datasets.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "source_sheet_name": {"type": "string", "description": "Name of the sheet containing the source data for the PivotTable."},
+                    "source_data_range": {"type": "string", "description": "Range of the source data (e.g., 'A1:G100', or a table name)."},
+                    "target_sheet_name": {"type": "string", "description": "Name of the sheet where the PivotTable will be created."},
+                    "target_cell_address": {"type": "string", "description": "Top-left cell for the PivotTable (e.g., 'A3')."},
+                    "pivot_table_name": {"type": "string", "description": "A unique name for the new PivotTable."},
+                    "row_fields": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "List of field names (column headers from source data) to use as row fields.",
+                        "default": None
+                    },
+                    "column_fields": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "List of field names to use as column fields.",
+                        "default": None
+                    },
+                    "value_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string", "description": "Source field name for the value calculation."},
+                                "function": {
+                                    "type": "string",
+                                    "description": "Summary function (e.g., 'Sum', 'Count', 'Average', 'Max', 'Min', 'Product', 'CountNumbers', 'StdDev', 'StdDevp', 'Var', 'Varp'). Defaults to 'Sum'.",
+                                    "default": "Sum",
+                                    "enum": ["Sum", "Count", "Average", "Max", "Min", "Product", "CountNumbers", "StdDev", "StdDevp", "Var", "Varp"]
+                                },
+                                "custom_name": {"type": "string", "description": "Optional custom name for the value field in the PivotTable (e.g., 'Total Sales').", "default": None}
+                            },
+                            "required": ["field"]
+                        },
+                        "description": "List of fields to use for values, including their summary function and optional custom name.",
+                        "default": None
+                    },
+                    "filter_fields": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "List of field names to use as report filters (page fields).",
+                        "default": None
+                    },
+                    "pivot_style": {
+                        "type": "string",
+                        "description": "Style for the PivotTable (e.g., 'PivotStyleMedium9', 'PivotStyleLight16'). Defaults to 'PivotStyleMedium9'.",
+                        "default": "PivotStyleMedium9"
+                    }
+                },
+                "required": ["path", "source_sheet_name", "source_data_range", "target_sheet_name", "target_cell_address", "pivot_table_name"],
+            }
+        ),
+        types.Tool(
+            name="modify_pivot_table_fields",
+            description="Modifies the field layout of an existing PivotTable. Allows adding or removing fields from row, column, value, and filter areas.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Sheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable to modify."},
+                    "add_row_fields": {"type": "array", "items": {"type": "string"}, "default": None, "description": "List of field names to add to rows."},
+                    "add_column_fields": {"type": "array", "items": {"type": "string"}, "default": None, "description": "List of field names to add to columns."},
+                    "add_value_fields": {
+                        "type": "array", "items": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string"}, "function": {"type": "string", "default": "Sum"}, "custom_name": {"type": "string", "default": None}
+                            }, "required": ["field"]},
+                        "default": None, "description": "List of value fields to add (see create_pivot_table for structure)."
+                    },
+                    "add_filter_fields": {"type": "array", "items": {"type": "string"}, "default": None, "description": "List of field names to add to filters."},
+                    "remove_fields": {"type": "array", "items": {"type": "string"}, "default": None, "description": "List of field names to remove from any area of the PivotTable."}
+                },
+                "required": ["path", "sheet_name", "pivot_table_name"]
+            }
+        ),
+        types.Tool(
+            name="sort_pivot_table_field",
+            description="Sorts items within a PivotTable field (rows or columns) based on their labels (A-Z) or by the values of a data field (e.g., sort Products by Sum of Sales).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Sheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "field_name": {"type": "string", "description": "The name of the PivotField (in rows or columns) whose items are to be sorted."},
+                    "sort_on_field": {"type": "string", "description": "The caption of the DataField (value field, e.g., 'Sum of Sales') to sort by, or the 'field_name' itself to sort by labels."},
+                    "sort_order": {
+                        "type": "string", "description": "Sort order: 'ascending' or 'descending'.",
+                        "enum": ["ascending", "descending"], "default": "ascending"
+                    },
+                    "sort_type": {
+                        "type": "string", "description": "Sort type: 'data' (sort by values in 'sort_on_field') or 'label' (sort 'field_name' items alphabetically).",
+                        "enum": ["data", "label"], "default": "data"
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "field_name", "sort_on_field"]
+            }
+        ),
+        types.Tool(
+            name="filter_pivot_table_items",
+            description="Applies filters to a PivotTable field by specifying which items should be visible or hidden. Useful for focusing on specific categories or values within the PivotTable.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Sheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "field_name": {"type": "string", "description": "The name of the PivotField to filter."},
+                    "visible_items": {
+                        "type": "array", "items": {"type": "string"}, "default": None,
+                        "description": "A list of item names to make visible. If provided, all other items in this field will be hidden. Takes precedence over hidden_items if both are provided."
+                    },
+                    "hidden_items": {
+                        "type": "array", "items": {"type": "string"}, "default": None,
+                        "description": "A list of item names to hide. Applied if visible_items is not provided."
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "field_name"]
+            }
+        ),
+
+        types.Tool(
+            name="refresh_pivot_table",
+            description="Refreshes a specified PivotTable to update its data from the source. This is essential if the underlying data for the PivotTable has changed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Sheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable to refresh."}
+                },
+                "required": ["path", "sheet_name", "pivot_table_name"]
+            }
+        ),
+        # --- BEGIN ADVANCED PIVOTTABLE TOOL DEFINITIONS ---
+        types.Tool(
+            name="add_pivot_table_calculated_field",
+            description="Adds a calculated field to an existing PivotTable (e.g., Profit = Revenue - Cost).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "field_name": {"type": "string", "description": "Name for the new calculated field."},
+                    "formula": {"type": "string", "description": "Formula for the calculated field, starting with '=' (e.g., '=Revenue-Cost', \"='Field Name With Space' * 0.1\")."}
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "field_name", "formula"]
+            }
+        ),
+        types.Tool(
+            name="add_pivot_table_calculated_item",
+            description="Adds a calculated item to a PivotField within a PivotTable (e.g., a 'North America' item in 'Region' field, summing 'USA' and 'Canada').",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "base_field_name": {"type": "string", "description": "The name of the PivotField where the calculated item will be added."},
+                    "item_name": {"type": "string", "description": "Name for the new calculated item."},
+                    "formula": {"type": "string", "description": "Formula for the calculated item (e.g., \"='USA' + 'Canada'\"). Item names with spaces must be in single quotes."}
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "base_field_name", "item_name", "formula"]
+            }
+        ),
+        types.Tool(
+            name="create_pivot_table_slicer",
+            description="Creates a slicer for a specified field in a PivotTable, allowing for interactive filtering. The slicer is placed on a specified sheet.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the sheet where the slicer will be placed."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable the slicer will connect to."},
+                    "slicer_field_name": {"type": "string", "description": "The name of the field from the PivotTable to be used for the slicer."},
+                    "slicer_name": {"type": "string", "description": "Optional: A unique name for the slicer object. If not provided, a default name will be generated.", "default": None},
+                    "top": {"type": "number", "description": "Optional: Position of the slicer from the top edge of the sheet (in points).", "default": None},
+                    "left": {"type": "number", "description": "Optional: Position of the slicer from the left edge of the sheet (in points).", "default": None},
+                    "width": {"type": "number", "description": "Optional: Width of the slicer (in points).", "default": None},
+                    "height": {"type": "number", "description": "Optional: Height of the slicer (in points).", "default": None}
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "slicer_field_name"]
+            }
+        ),
+        types.Tool(
+            name="modify_pivot_table_slicer",
+            description="Modifies properties of an existing PivotTable slicer, such as selected items, style, caption, position, and size.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the sheet where the slicer is located."},
+                    "slicer_name": {"type": "string", "description": "The name of the slicer to modify."},
+                    "selected_items": {
+                        "type": "array", "items": {"type": "string"}, "default": None,
+                        "description": "Optional: List of item names to select in the slicer. If None, current selection is unchanged. If an empty list, all items are deselected."
+                    },
+                    "slicer_style": {"type": "string", "description": "Optional: New style for the slicer (e.g., 'SlicerStyleLight1', 'SlicerStyleDark2').", "default": None},
+                    "caption": {"type": "string", "description": "Optional: New caption for the slicer header.", "default": None},
+                    "top": {"type": "number", "description": "Optional: New position from the top edge (in points).", "default": None},
+                    "left": {"type": "number", "description": "Optional: New position from the left edge (in points).", "default": None},
+                    "width": {"type": "number", "description": "Optional: New width of the slicer (in points).", "default": None},
+                    "height": {"type": "number", "description": "Optional: New height of the slicer (in points).", "default": None},
+                    "number_of_columns": {"type": "integer", "description": "Optional: Number of columns to display items in the slicer.", "default": None}
+                },
+                "required": ["path", "sheet_name", "slicer_name"]
+            }
+        ),
+        types.Tool(
+            name="set_pivot_table_layout",
+            description="Changes the report layout of a PivotTable (Compact, Outline, or Tabular) and optionally repeats item labels.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "layout_type": {
+                        "type": "string", "description": "The desired report layout.",
+                        "enum": ["compact", "outline", "tabular"]
+                    },
+                    "repeat_all_item_labels": {
+                        "type": "boolean", "default": None,
+                        "description": "Optional: For Outline and Tabular layouts, set to True to repeat item labels for all row fields. Set to False to not repeat."
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "layout_type"]
+            }
+        ),
+        types.Tool(
+            name="configure_pivot_table_totals",
+            description="Configures grand totals (for rows and/or columns) and subtotals for specific fields in a PivotTable.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "grand_totals_for_rows": {"type": "boolean", "default": None, "description": "Set to True to show grand totals for rows, False to hide. Null to leave unchanged."},
+                    "grand_totals_for_columns": {"type": "boolean", "default": None, "description": "Set to True to show grand totals for columns, False to hide. Null to leave unchanged."},
+                    "subtotals_settings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Name of the row or column field to configure subtotals for."},
+                                "show": {"type": "boolean", "description": "True to show subtotals for this field, False to hide."}
+                            },
+                            "required": ["field_name", "show"]
+                        },
+                        "default": None,
+                        "description": "Optional: List of settings to configure subtotals for specific fields."
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name"]
+            }
+        ),
+        types.Tool(
+            name="format_pivot_table_part",
+            description="Applies specific formatting (font, color, alignment) to different parts of a PivotTable like data body, headers, etc.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "part_to_format": {
+                        "type": "string",
+                        "description": "The part of the PivotTable to format.",
+                        "enum": ["data_body_range", "row_header_range", "column_header_range", "page_field_range"] # "grand_total_range" is more complex
+                    },
+                    "font_bold": {"type": "boolean", "default": None},
+                    "font_italic": {"type": "boolean", "default": None},
+                    "font_size": {"type": "integer", "default": None},
+                    "font_color_rgb": {
+                        "type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3,
+                        "description": "Font color as an RGB tuple (e.g., [255, 0, 0] for red).", "default": None
+                    },
+                    "bg_color_rgb": {
+                        "type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3,
+                        "description": "Background color as an RGB tuple (e.g., [255, 255, 0] for yellow).", "default": None
+                    },
+                    "horizontal_alignment": {
+                        "type": "string", "default": None,
+                        "description": "Horizontal text alignment.",
+                        "enum": ["left", "center", "right", "general"]
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "part_to_format"]
+            }
+        ),
+        types.Tool(
+            name="change_pivot_table_data_source",
+            description="Changes the source data range for an existing PivotTable and refreshes it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "new_source_data": {"type": "string", "description": "The new data source range (e.g., 'Sheet1!A1:H200' or 'MyNewTable')."}
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "new_source_data"]
+            }
+        ),
+        # New tool definitions
+        types.Tool(
+            name="set_pivot_table_value_field_calculation",
+            description="Configures how values are displayed in a PivotTable, such as percentage of total, difference from, running total, ranking, etc.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "value_field_caption": {"type": "string", "description": "The caption of the value field to modify (e.g., 'Sum of Sales')."},
+                    "calculation_type": {
+                        "type": "string", 
+                        "description": "The type of calculation to apply ('normal', '% of total', 'difference_from', 'running_total', etc).",
+                        "enum": [
+                            "normal", "% of total", "% of row", "% of column", 
+                            "difference_from", "% difference_from", 
+                            "running_total", "% of running_total", 
+                            "rank", "index"
+                        ]
+                    },
+                    "base_field": {
+                        "type": "string", 
+                        "description": "For relative calculations (e.g., difference_from), the field to calculate relative to.",
+                        "default": None
+                    },
+                    "base_item": {
+                        "type": "string", 
+                        "description": "For relative calculations (e.g., difference_from), the specific item to calculate relative to.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "value_field_caption", "calculation_type"]
+            }
+        ),
+        types.Tool(
+            name="group_pivot_field_items",
+            description="Groups items in a PivotTable field based on date ranges, numeric ranges, or manual selection.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "field_name": {"type": "string", "description": "Name of the field to group."},
+                    "group_type": {
+                        "type": "string", 
+                        "description": "Type of grouping to perform.",
+                        "enum": ["date", "numeric", "selection"],
+                        "default": "date"
+                    },
+                    "start_value": {
+                        "type": "number", 
+                        "description": "For numeric grouping, the start value of the range.",
+                        "default": None
+                    },
+                    "end_value": {
+                        "type": "number", 
+                        "description": "For numeric grouping, the end value of the range.",
+                        "default": None
+                    },
+                    "interval": {
+                        "type": "number", 
+                        "description": "For numeric grouping, the interval size.",
+                        "default": None
+                    },
+                    "date_parts": {
+                        "type": "object", 
+                        "description": "For date grouping, which date parts to include (e.g., {'years': true, 'quarters': true, 'months': true}).",
+                        "default": None
+                    },
+                    "selected_items": {
+                        "type": "array", 
+                        "items": {"type": "string"},
+                        "description": "For selection grouping, the items to group together.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "field_name", "group_type"]
+            }
+        ),
+        types.Tool(
+            name="ungroup_pivot_field_items",
+            description="Removes grouping from a PivotTable field.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "field_name": {"type": "string", "description": "Name of the field to ungroup."},
+                    "group_name": {
+                        "type": "string", 
+                        "description": "Optional name of a specific group to ungroup. If not provided, ungroups all.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "field_name"]
+            }
+        ),
+        types.Tool(
+            name="apply_pivot_table_conditional_formatting",
+            description="Applies conditional formatting to specific parts of a PivotTable based on various criteria.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet containing the PivotTable."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable."},
+                    "formatting_scope": {
+                        "type": "string", 
+                        "description": "Which part of the PivotTable to format.",
+                        "enum": ["data_field", "field_items", "grand_totals", "subtotals"],
+                        "default": "data_field"
+                    },
+                    "field_name": {
+                        "type": "string", 
+                        "description": "For data_field: the value field caption (e.g. 'Sum of Sales'). For field_items: the field to format items for (e.g. 'Region')."
+                    },
+                    "condition_type": {
+                        "type": "string", 
+                        "description": "The type of condition to apply for the formatting.",
+                        "enum": ["top_bottom", "greater_than", "less_than", "between", "equal_to", "contains", "date_occurring"],
+                        "default": "top_bottom"
+                    },
+                    "condition_parameters": {
+                        "type": "object", 
+                        "description": "Parameters specific to the condition_type (e.g., {'rank': 5, 'type': 'top', 'percent': True} for top 5%)."
+                    },
+                    "format_settings": {
+                        "type": "object", 
+                        "description": "Formatting to apply, such as {'bold': True, 'bg_color_rgb': [255,0,0]} for bold text with red background."
+                    },
+                    "specific_items": {
+                        "type": "array", 
+                        "items": {"type": "string"},
+                        "description": "For field_items scope, optionally limit formatting to these specific items.",
+                        "default": None
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "formatting_scope", "field_name", "condition_type"]
+            }
+        ),
+        types.Tool(
+            name="create_timeline_slicer",
+            description="Creates a timeline slicer for date fields in a PivotTable, providing a specialized date-filtering interface. Timeline slicers offer intuitive filtering by days, months, quarters, and years.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet where the timeline will be placed."},
+                    "pivot_table_name": {"type": "string", "description": "Name of the PivotTable to connect the timeline to."},
+                    "date_field_name": {"type": "string", "description": "Name of the date field from the PivotTable to use for the timeline."},
+                    "timeline_name": {
+                        "type": "string", 
+                        "description": "Optional custom name for the timeline. If not provided, a default name will be generated.",
+                        "default": None
+                    },
+                    "top": {
+                        "type": "number", 
+                        "description": "Position of the timeline from the top edge of the sheet (in points).",
+                        "default": None
+                    },
+                    "left": {
+                        "type": "number", 
+                        "description": "Position of the timeline from the left edge of the sheet (in points).",
+                        "default": None
+                    },
+                    "width": {
+                        "type": "number", 
+                        "description": "Width of the timeline (in points).",
+                        "default": None
+                    },
+                    "height": {
+                        "type": "number", 
+                        "description": "Height of the timeline (in points).",
+                        "default": None
+                    },
+                    "time_level": {
+                        "type": "string", 
+                        "description": "Default timeline level to display.",
+                        "enum": ["days", "months", "quarters", "years"],
+                        "default": "months"
+                    }
+                },
+                "required": ["path", "sheet_name", "pivot_table_name", "date_field_name"]
+            }
+        ),
+        types.Tool(
+            name="connect_slicer_to_pivot_tables",
+            description="Connects a single slicer or timeline to multiple PivotTables, allowing synchronized filtering across them, which is perfect for interactive dashboards.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "sheet_name": {"type": "string", "description": "Name of the worksheet where the slicer is located."},
+                    "slicer_name": {"type": "string", "description": "Name of the slicer or timeline to connect."},
+                    "pivot_table_names": {
+                        "type": "array", 
+                        "items": {"type": "string"},
+                        "description": "List of PivotTable names to connect to the slicer."
+                    }
+                },
+                "required": ["path", "sheet_name", "slicer_name", "pivot_table_names"]
+            }
+        ),
+        types.Tool(
+            name="setup_power_pivot_data_model",
+            description="Sets up a Power Pivot data model by importing external data sources and establishing relationships between tables in the Excel workbook.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "data_sources": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source_type": {
+                                    "type": "string",
+                                    "description": "Type of data source.",
+                                    "enum": ["excel", "csv", "database", "worksheet_table"]
+                                },
+                                "location": {"type": "string", "description": "Path or connection string for the data source."},
+                                "target_table_name": {"type": "string", "description": "Name for the table in the data model."},
+                                "properties": {
+                                    "type": "object",
+                                    "description": "Source-specific properties like sheet_name, table_name, connection_string, query, etc."
+                                }
+                            },
+                            "required": ["source_type", "location", "target_table_name"]
+                        },
+                        "description": "List of data sources to add to the model."
+                    },
+                    "relationships": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from_table": {"type": "string", "description": "Parent table name."},
+                                "from_column": {"type": "string", "description": "Column in the parent table."},
+                                "to_table": {"type": "string", "description": "Child table name."},
+                                "to_column": {"type": "string", "description": "Column in the child table."},
+                                "active": {"type": "boolean", "description": "Whether this is an active relationship.", "default": True}
+                            },
+                            "required": ["from_table", "from_column", "to_table", "to_column"]
+                        },
+                        "description": "List of relationships to define between tables."
+                    }
+                },
+                "required": ["path", "data_sources"]
+            }
+        ),
+        types.Tool(
+            name="create_power_pivot_measure",
+            description="Creates a new calculated measure in the Power Pivot data model using DAX (Data Analysis Expressions).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the Excel workbook."},
+                    "measure_name": {"type": "string", "description": "Name for the new measure."},
+                    "dax_formula": {"type": "string", "description": "DAX formula that defines the measure's calculation."},
+                    "table_name": {"type": "string", "description": "Name of the table where the measure will be displayed."},
+                    "display_folder": {
+                        "type": "string", 
+                        "description": "Optional folder path to organize measures in the field list.",
+                        "default": None
+                    },
+                    "format_string": {
+                        "type": "string", 
+                        "description": "Optional format string for the measure (e.g., '$#,##0.00' for currency).",
+                        "default": None
+                    }
+                },
+                "required": ["path", "measure_name", "dax_formula", "table_name"]
+            }
+        ),
+        
+        # --- PIVOTCHART TOOL DEFINITIONS ---
+        
+        types.Tool(
+            name="create_pivot_chart",
+            description="Create pivot charts from various data sources with full automation. This is your go-to tool for creating "
+                       "professional pivot charts from either existing pivot tables, data ranges, or by creating new pivot tables. "
+                       "Supports all major chart types (column, bar, line, pie, combo) with automatic styling and formatting. "
+                       "Perfect for transforming raw data into insightful visualizations instantly.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook. Can be absolute path, relative path, or filename to search for."
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["pivot_table", "data_range", "new_pivot"],
+                        "description": "Data source type: 'pivot_table' for existing pivot table, 'data_range' for direct chart from range, 'new_pivot' to create pivot table first then chart"
+                    },
+                    "data_range": {
+                        "type": "string",
+                        "description": "Excel range (e.g., 'A1:D100') - required for 'data_range' and 'new_pivot' source types"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Name of existing pivot table - required for 'pivot_table' source type"
+                    },
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["COLUMN", "BAR", "LINE", "PIE", "AREA", "DOUGHNUT", "COMBO", "COLUMN_STACKED", "BAR_STACKED", "LINE_MARKERS", "SCATTER"],
+                        "default": "COLUMN",
+                        "description": "Type of chart to create. Choose based on your data visualization needs."
+                    },
+                    "chart_title": {
+                        "type": "string",
+                        "description": "Title for the chart. If not provided, chart will have no title."
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "default": [100, 100],
+                        "description": "Chart position as [x, y] coordinates in pixels from top-left corner"
+                    },
+                    "pivot_config": {
+                        "type": "object",
+                        "properties": {
+                            "row_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Fields to use as row categories in pivot table"
+                            },
+                            "column_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Fields to use as column categories in pivot table"
+                            },
+                            "value_fields": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Fields to use as values/measures in pivot table"
+                            },
+                            "destination": {
+                                "type": "string",
+                                "default": "H1",
+                                "description": "Where to place the pivot table (e.g., 'H1' or 'Sheet2!A1')"
+                            }
+                        },
+                        "description": "Pivot table configuration - required for 'new_pivot' source type"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name to work with. If not provided, uses active sheet."
+                    }
+                },
+                "required": ["workbook_path", "source_type"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="manage_chart_elements",
+            description="Comprehensive chart formatting and element management tool. Control every aspect of your chart's appearance "
+                       "including titles, legends, data labels, gridlines, and axis formatting. This tool handles all visual "
+                       "customization needs to make your charts presentation-ready with professional styling.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook containing the chart"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name of the chart to modify. Use 'list_charts' tool first if you don't know the name."
+                    },
+                    "title_config": {
+                        "type": "object",
+                        "properties": {
+                            "show_title": {"type": "boolean", "default": True},
+                            "title_text": {"type": "string", "description": "Chart title text"}
+                        },
+                        "description": "Chart title configuration"
+                    },
+                    "axis_config": {
+                        "type": "object",
+                        "properties": {
+                            "x_axis_title": {"type": "string", "description": "X-axis title"},
+                            "y_axis_title": {"type": "string", "description": "Y-axis title"},
+                            "show_x_title": {"type": "boolean", "default": True},
+                            "show_y_title": {"type": "boolean", "default": True}
+                        },
+                        "description": "Axis titles configuration"
+                    },
+                    "legend_config": {
+                        "type": "object",
+                        "properties": {
+                            "show_legend": {"type": "boolean", "default": True},
+                            "position": {
+                                "type": "string",
+                                "enum": ["RIGHT", "LEFT", "TOP", "BOTTOM", "CORNER"],
+                                "default": "RIGHT",
+                                "description": "Legend position"
+                            }
+                        },
+                        "description": "Legend configuration"
+                    },
+                    "data_labels": {
+                        "type": "object",
+                        "properties": {
+                            "show_labels": {"type": "boolean", "default": False},
+                            "series_index": {"type": "integer", "default": 1, "description": "Which series to apply labels to (1-based)"}
+                        },
+                        "description": "Data labels configuration"
+                    },
+                    "gridlines": {
+                        "type": "object",
+                        "properties": {
+                            "x_major": {"type": "boolean", "description": "Show X-axis major gridlines"},
+                            "x_minor": {"type": "boolean", "description": "Show X-axis minor gridlines"},
+                            "y_major": {"type": "boolean", "description": "Show Y-axis major gridlines"},
+                            "y_minor": {"type": "boolean", "description": "Show Y-axis minor gridlines"}
+                        },
+                        "description": "Gridlines configuration"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name if chart is on particular sheet"
+                    }
+                },
+                "required": ["workbook_path", "chart_name"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="apply_chart_styling",
+            description="Apply professional styling and layouts to charts instantly. Transform basic charts into polished, "
+                       "corporate-ready visualizations using Excel's built-in styles and layouts. Also supports dynamic "
+                       "chart type changes for different data presentation needs. Perfect for creating consistent, branded charts.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook containing the chart"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name of the chart to style"
+                    },
+                    "style_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 48,
+                        "description": "Excel chart style ID (1-48). Different IDs provide different color schemes and formatting."
+                    },
+                    "layout_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 11,
+                        "description": "Excel chart layout ID (1-11). Controls overall chart element arrangement and design."
+                    },
+                    "new_chart_type": {
+                        "type": "string",
+                        "enum": ["COLUMN", "BAR", "LINE", "PIE", "AREA", "DOUGHNUT", "COMBO", "COLUMN_STACKED", "BAR_STACKED", "LINE_MARKERS", "SCATTER"],
+                        "description": "Change chart type dynamically. Useful for exploring different data visualizations."
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name if chart is on particular sheet"
+                    }
+                },
+                "required": ["workbook_path", "chart_name"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="manage_pivot_fields",
+            description="Advanced pivot table field management and calculated field creation. Dynamically modify pivot table "
+                       "structure by changing field orientations, adding/removing fields, creating calculated fields for "
+                       "complex analysis (like profit margins, ratios, growth rates), and configuring summary functions. "
+                       "Essential for creating sophisticated business intelligence reports.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook containing the pivot table"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Name of the pivot table to modify"
+                    },
+                    "field_operations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Name of the field to modify"},
+                                "orientation": {
+                                    "type": "string",
+                                    "enum": ["ROW", "COLUMN", "DATA", "PAGE", "HIDDEN"],
+                                    "description": "Where to place this field in the pivot table"
+                                },
+                                "summary_function": {
+                                    "type": "string",
+                                    "enum": ["SUM", "COUNT", "AVERAGE", "MAX", "MIN", "PRODUCT"],
+                                    "description": "Summary function for data fields"
+                                }
+                            },
+                            "required": ["field_name", "orientation"]
+                        },
+                        "description": "List of field operations to perform"
+                    },
+                    "calculated_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Name for the calculated field"},
+                                "formula": {"type": "string", "description": "Excel formula for calculation (e.g., '=Sales-Costs' for profit)"}
+                            },
+                            "required": ["field_name", "formula"]
+                        },
+                        "description": "Calculated fields to create for advanced analysis"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name if pivot table is on particular sheet"
+                    }
+                },
+                "required": ["workbook_path", "pivot_table_name"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="create_combo_chart",
+            description="Create sophisticated combination charts that display multiple data series with different chart types "
+                       "on primary and secondary axes. Perfect for comparing different types of metrics (e.g., sales volumes vs. "
+                       "profit percentages, actual vs. targets). Enables complex data storytelling in a single visualization.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "data_range": {
+                        "type": "string",
+                        "description": "Excel range containing the data (e.g., 'A1:E12')"
+                    },
+                    "chart_title": {
+                        "type": "string",
+                        "description": "Title for the combination chart"
+                    },
+                    "primary_series": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Names of data series to display with primary chart type (left axis)"
+                    },
+                    "secondary_series": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Names of data series to display with secondary chart type (right axis)"
+                    },
+                    "primary_type": {
+                        "type": "string",
+                        "enum": ["COLUMN", "BAR", "LINE", "AREA"],
+                        "default": "COLUMN",
+                        "description": "Chart type for primary series"
+                    },
+                    "secondary_type": {
+                        "type": "string",
+                        "enum": ["LINE", "COLUMN", "BAR", "AREA"],
+                        "default": "LINE",
+                        "description": "Chart type for secondary series"
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "default": [100, 100],
+                        "description": "Chart position as [x, y] coordinates"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name to create chart on"
+                    }
+                },
+                "required": ["workbook_path", "data_range", "primary_series", "secondary_series"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="add_chart_filters",
+            description="Add interactive slicers and filters to pivot charts for dynamic data exploration. Create user-friendly "
+                       "filter controls that allow end-users to slice and dice data without technical knowledge. Perfect for "
+                       "building interactive dashboards and self-service analytics solutions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Name of the pivot table to add slicers to"
+                    },
+                    "slicer_fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "field_name": {"type": "string", "description": "Field to create slicer for"},
+                                "position": {
+                                    "type": "array",
+                                    "items": {"type": "integer"},
+                                    "minItems": 2,
+                                    "maxItems": 2,
+                                    "default": [500, 100],
+                                    "description": "Slicer position as [x, y] coordinates"
+                                }
+                            },
+                            "required": ["field_name"]
+                        },
+                        "description": "List of fields to create slicers for"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name"
+                    }
+                },
+                "required": ["workbook_path", "pivot_table_name", "slicer_fields"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="refresh_and_update",
+            description="Refresh pivot tables, charts, and data connections to ensure all visualizations reflect the latest data. "
+                       "Also supports dynamic data source switching for charts. Essential for maintaining accurate, up-to-date "
+                       "reports and dashboards in live data environments.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["refresh_all", "refresh_pivot", "update_chart_source"],
+                        "description": "Type of refresh/update operation to perform"
+                    },
+                    "pivot_table_name": {
+                        "type": "string",
+                        "description": "Specific pivot table name to refresh (for 'refresh_pivot' operation)"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Chart name for data source update (for 'update_chart_source' operation)"
+                    },
+                    "new_data_range": {
+                        "type": "string",
+                        "description": "New data range for chart (for 'update_chart_source' operation)"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name"
+                    }
+                },
+                "required": ["workbook_path", "operation"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="export_and_distribute",
+            description="Export charts and create multi-chart dashboards for distribution. Save charts as images (PNG, JPG, PDF) "
+                       "for presentations and reports, or create comprehensive dashboard layouts with multiple related charts. "
+                       "Streamlines the process of sharing insights and creating professional reports.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["export_chart", "create_dashboard"],
+                        "description": "Export single chart or create multi-chart dashboard"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name of chart to export (for 'export_chart' operation)"
+                    },
+                    "export_path": {
+                        "type": "string",
+                        "description": "File path for export (for 'export_chart' operation)"
+                    },
+                    "file_format": {
+                        "type": "string",
+                        "enum": ["PNG", "JPG", "JPEG", "GIF", "PDF"],
+                        "default": "PNG",
+                        "description": "Export file format"
+                    },
+                    "dashboard_config": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["pivot", "range"],
+                                    "description": "Chart creation type"
+                                },
+                                "params": {
+                                    "type": "object",
+                                    "description": "Parameters for chart creation"
+                                }
+                            },
+                            "required": ["type", "params"]
+                        },
+                        "description": "Configuration for multiple charts in dashboard (for 'create_dashboard' operation)"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name"
+                    }
+                },
+                "required": ["workbook_path", "operation"],
+                "additionalProperties": False
+            }
+        ),
+        
+        types.Tool(
+            name="get_chart_info",
+            description="Retrieve comprehensive information about charts, pivot tables, and data sources in Excel workbooks. "
+                       "Perfect for discovery and analysis of existing Excel files, understanding data structures, and getting "
+                       "chart specifications. Essential for troubleshooting and planning chart modifications.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workbook_path": {
+                        "type": "string",
+                        "description": "Path to the Excel workbook"
+                    },
+                    "info_type": {
+                        "type": "string",
+                        "enum": ["list_charts", "list_pivot_tables", "chart_details", "workbook_overview"],
+                        "description": "Type of information to retrieve"
+                    },
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Specific chart name for detailed information (for 'chart_details' type)"
+                    },
+                    "sheet_name": {
+                        "type": "string",
+                        "description": "Specific worksheet name to focus on"
+                    }
+                },
+                "required": ["workbook_path", "info_type"],
+                "additionalProperties": False
+            },
+            idempotentHint=True,
+            readOnlyHint=True
         )
     ] 
+
+

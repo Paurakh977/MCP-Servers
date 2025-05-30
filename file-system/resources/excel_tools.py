@@ -1744,7 +1744,12 @@ def apply_conditional_formatting(
     border_style: Optional[str] = None,
     condition_column: Optional[str] = None,
     format_entire_row: bool = False,
-    columns_to_format: Optional[List[str]] = None
+    columns_to_format: Optional[List[str]] = None,
+    handle_formulas: bool = True,
+    outside_range_columns: Optional[List[str]] = None,
+    compare_columns: Optional[Dict[str, str]] = None,
+    date_format: Optional[str] = None,
+    icon_set: Optional[str] = None
 ) -> Dict[str, Any]:
     """Apply conditional formatting to cells based on a specified condition.
     
@@ -1762,6 +1767,7 @@ def apply_conditional_formatting(
                    - Date: ">DATE(2023,1,1)", "<=TODAY()"
                    - Blank: "=ISBLANK()", "<>ISBLANK()"
                    - Compound conditions: ">50 AND <=70", "<20 OR >80", "CONTAINS('Pass') OR =ISBLANK()"
+                   - Column comparisons: ">{F}" (compare with column F), "<=2*{C}" (compare with twice value in column C)
         bold: Whether to apply bold formatting to matching cells
         italic: Whether to apply italic formatting to matching cells
         font_size: Optional font size to apply to matching cells
@@ -1775,13 +1781,25 @@ def apply_conditional_formatting(
         columns_to_format: Optional list of specific column letters to format when condition is met
                            (e.g. ['A', 'C', 'D']). Only used when format_entire_row is False or
                            when you want to format specific columns in the row
+        handle_formulas: Whether to evaluate formulas for condition checking (default True)
+        outside_range_columns: Optional list of columns outside the range to format when condition is met
+        compare_columns: Optional dictionary mapping column references in condition to actual column letters
+                         (e.g., {"profit": "F"} to refer to column F as "profit" in conditions)
+        date_format: Optional date format string for date comparisons (e.g., "%Y-%m-%d")
+        icon_set: Optional icon set to apply ('3arrows', '3trafficlights', '3symbols', '3stars', etc.)
     
     Returns:
         Dictionary with success status, message, and count of formatted cells
     """
     try:
-        # Load workbook
+        # Load workbook with and without data_only option to access both formulas and calculated values
         wb = load_workbook(filepath)
+        
+        if handle_formulas:
+            # Load workbook with data_only=True to get calculated values
+            wb_data_only = load_workbook(filepath, data_only=True)
+        else:
+            wb_data_only = None
         
         # Validate sheet
         if sheet_name not in wb.sheetnames:
@@ -1791,6 +1809,7 @@ def apply_conditional_formatting(
             }
             
         worksheet = wb[sheet_name]
+        worksheet_data_only = wb_data_only[sheet_name] if handle_formulas else None
         
         # Parse cell range
         try:
@@ -1840,6 +1859,33 @@ def apply_conditional_formatting(
                 format_entire_row = False
         else:
             should_format_specific_columns = False
+        
+        # If outside_range_columns is specified, convert to column indices
+        outside_range_indices = []
+        if outside_range_columns:
+            for col_letter in outside_range_columns:
+                try:
+                    col_idx = column_index_from_string(col_letter.upper().strip())
+                    outside_range_indices.append(col_idx)
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "error": f"Invalid outside range column: {col_letter} - {str(e)}"
+                    }
+        
+        # Build mapping for column comparisons if provided
+        column_name_to_letter = {}
+        column_name_to_index = {}
+        if compare_columns:
+            for name, col_letter in compare_columns.items():
+                try:
+                    column_name_to_letter[name] = col_letter.upper().strip()
+                    column_name_to_index[name] = column_index_from_string(col_letter.upper().strip())
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "error": f"Invalid column mapping: {name} -> {col_letter} - {str(e)}"
+                    }
         
         # Set up font formatting options
         font_args = {}
@@ -1894,22 +1940,137 @@ def apply_conditional_formatting(
         formatted_cells_count = 0
         condition = condition.strip()
         
+        # Pre-process condition to handle column name references like {profit} or {sales}
+        if compare_columns:
+            for col_name, col_letter in column_name_to_letter.items():
+                pattern = r'\{' + col_name + r'\}'
+                condition = re.sub(pattern, f"{{{col_letter}}}", condition, flags=re.IGNORECASE)
+        
+        # Create a dictionary to store formula calculated values
+        calculated_values = {}
+        if handle_formulas:
+            # First pass - collect all calculated formula values from the data_only workbook
+            for row in range(min_row, max_row + 1):
+                for col in range(1, worksheet.max_column + 1):
+                    regular_cell = worksheet.cell(row=row, column=col)
+                    cell_value = worksheet_data_only.cell(row=row, column=col).value
+                    
+                    # Check if this is a formula cell
+                    has_formula = regular_cell.data_type == 'f' if hasattr(regular_cell, 'data_type') else False
+                    if has_formula:
+                        cell_ref = f"{get_column_letter(col)}{row}"
+                        calculated_values[cell_ref] = cell_value
+
         # Enhanced helper functions to evaluate conditions with support for complex logic
-        def evaluate_numeric_condition(cell_value, condition):
-            if not isinstance(cell_value, (int, float)) and not str(cell_value).replace('.', '', 1).isdigit():
-                return False
+        def evaluate_numeric_condition(cell_value, condition, row=None):
+            # Support for formula cells
+            if not isinstance(cell_value, (int, float)) and not (isinstance(cell_value, str) and cell_value.replace('.', '', 1).isdigit()):
+                try:
+                    cell_value = float(cell_value) if cell_value is not None else 0
+                except (ValueError, TypeError):
+                    return False
+            else:
+                cell_value = float(cell_value) if cell_value is not None else 0
                 
             try:
-                cell_value = float(cell_value) if cell_value is not None else 0
+                # Check for column references like {F} in condition
+                col_refs = re.findall(r'\{([A-Z]+)\}', condition)
+                if col_refs and row:
+                    for col_ref in col_refs:
+                        if col_ref in column_name_to_letter:
+                            actual_col = column_name_to_letter[col_ref]
+                        else:
+                            actual_col = col_ref
+                            
+                        # Get the column index
+                        try:
+                            col_idx = column_index_from_string(actual_col)
+                            
+                            # Get the cell value from the data_only worksheet if available
+                            if worksheet_data_only:
+                                ref_cell_value = worksheet_data_only.cell(row=row, column=col_idx).value
+                            else:
+                                ref_cell_value = worksheet.cell(row=row, column=col_idx).value
+                                
+                            if ref_cell_value is not None:
+                                try:
+                                    ref_cell_value = float(ref_cell_value)
+                                    condition = condition.replace(f"{{{col_ref}}}", str(ref_cell_value))
+                                except (ValueError, TypeError):
+                                    # If we can't convert to float, treat it as 0
+                                    condition = condition.replace(f"{{{col_ref}}}", "0")
+                        except Exception:
+                            # If column reference is invalid, replace with 0
+                            condition = condition.replace(f"{{{col_ref}}}", "0")
+
+                # Handle date comparisons
+                if "DATE(" in condition.upper() or "TODAY(" in condition.upper():
+                    import datetime as dt
+                    
+                    # Convert cell value to date if it's a float (Excel dates are floats)
+                    if isinstance(cell_value, (int, float)):
+                        excel_epoch = dt.datetime(1899, 12, 30)
+                        try:
+                            cell_date = excel_epoch + dt.timedelta(days=cell_value)
+                        except Exception:
+                            return False
+                    elif isinstance(cell_value, dt.datetime):
+                        cell_date = cell_value
+                    else:
+                        # Try to parse string date
+                        if date_format:
+                            try:
+                                cell_date = dt.datetime.strptime(str(cell_value), date_format)
+                            except Exception:
+                                return False
+                        else:
+                            return False
+                    
+                    # Replace TODAY() with current date
+                    if "TODAY(" in condition.upper():
+                        today = dt.datetime.today().date()
+                        excel_days = (today - excel_epoch.date()).days
+                        condition = re.sub(r'TODAY\(\)', str(excel_days), condition, flags=re.IGNORECASE)
+                    
+                    # Replace DATE(year, month, day) with Excel date value
+                    date_patterns = re.findall(r'DATE\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)', condition, re.IGNORECASE)
+                    for year, month, day in date_patterns:
+                        try:
+                            date_obj = dt.datetime(int(year), int(month), int(day))
+                            excel_days = (date_obj.date() - excel_epoch.date()).days
+                            condition = re.sub(r'DATE\(' + year + r'\s*,\s*' + month + r'\s*,\s*' + day + r'\)', 
+                                              str(excel_days), condition)
+                        except Exception:
+                            pass
+                    
+                    # Convert cell_date to Excel days for comparison
+                    cell_value = (cell_date.date() - excel_epoch.date()).days
                 
                 # Check for compound conditions (AND, OR)
                 if " AND " in condition.upper():
                     parts = condition.upper().split(" AND ")
-                    return all(evaluate_numeric_condition(cell_value, part.strip()) for part in parts)
+                    return all(evaluate_numeric_condition(cell_value, part.strip(), row) for part in parts)
                     
                 if " OR " in condition.upper():
                     parts = condition.upper().split(" OR ")
-                    return any(evaluate_numeric_condition(cell_value, part.strip()) for part in parts)
+                    return any(evaluate_numeric_condition(cell_value, part.strip(), row) for part in parts)
+                
+                # Handle parenthesized groups
+                if "(" in condition and ")" in condition and not any(f in condition.upper() for f in ["DATE(", "TODAY("]):
+                    # Simple formula evaluation for basic expressions like (A>5 AND B<10)
+                    try:
+                        # Replace condition operators with Python operators
+                        py_condition = condition.replace("=", "==").replace("<>", "!=")
+                        py_condition = py_condition.replace("AND", "and").replace("OR", "or")
+                        
+                        # Replace cell_value placeholder
+                        py_condition = py_condition.replace("cell_value", str(cell_value))
+                        
+                        # Evaluate using safer eval
+                        return eval(py_condition, {"__builtins__": {}}, {"cell_value": cell_value})
+                    except Exception:
+                        # Fall back to standard comparison if eval fails
+                        pass
                 
                 # Single conditions
                 if condition.startswith(">="):
@@ -1930,23 +2091,70 @@ def apply_conditional_formatting(
                 elif condition.startswith("="):
                     threshold = float(condition[1:].strip())
                     return cell_value == threshold
+                    
+                # If we get here, try to evaluate the condition as a formula comparing to cell_value
+                try:
+                    # Build a formula like "=cell_value > 100" or "=cell_value <= 2*B5"
+                    formula = condition.replace("cell_value", str(cell_value))
+                    
+                    # Use evaluate_excel_formula if it's a complex formula
+                    if "*" in formula or "/" in formula or "+" in formula or "-" in formula:
+                        eval_result = evaluate_excel_formula(f"={formula}", {"cell_value": cell_value})
+                        if eval_result.get("success", False):
+                            return bool(eval_result["value"])
+                    
+                    # If not a complex formula, direct comparison
+                    comp_value = float(formula)
+                    return cell_value == comp_value
+                except Exception:
+                    return False
+                    
                 return False
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                # Log the error but continue processing
+                logger.warning(f"Error evaluating numeric condition: {e}")
                 return False
         
-        def evaluate_text_condition(cell_value, condition):
+        def evaluate_text_condition(cell_value, condition, row=None):
             if cell_value is None:
                 cell_value = ""
             cell_value = str(cell_value).lower()
             
+            # Check for column references like {F} in condition
+            col_refs = re.findall(r'\{([A-Z]+)\}', condition)
+            if col_refs and row:
+                for col_ref in col_refs:
+                    if col_ref in column_name_to_letter:
+                        actual_col = column_name_to_letter[col_ref]
+                    else:
+                        actual_col = col_ref
+                        
+                    # Get the column index
+                    try:
+                        col_idx = column_index_from_string(actual_col)
+                        
+                        # Get the cell value from the data_only worksheet if available
+                        if worksheet_data_only:
+                            ref_cell_value = worksheet_data_only.cell(row=row, column=col_idx).value
+                        else:
+                            ref_cell_value = worksheet.cell(row=row, column=col_idx).value
+                            
+                        if ref_cell_value is not None:
+                            ref_cell_value = str(ref_cell_value)
+                            # For text conditions, keep the quotes
+                            condition = condition.replace(f"{{{col_ref}}}", f"'{ref_cell_value}'")
+                    except Exception:
+                        # If column reference is invalid, replace with empty string
+                        condition = condition.replace(f"{{{col_ref}}}", "''")
+            
             # Check for compound conditions (AND, OR)
             if " AND " in condition.upper():
                 parts = condition.upper().split(" AND ")
-                return all(evaluate_text_condition(cell_value, part.strip()) for part in parts)
+                return all(evaluate_text_condition(cell_value, part.strip(), row) for part in parts)
                 
             if " OR " in condition.upper():
                 parts = condition.upper().split(" OR ")
-                return any(evaluate_text_condition(cell_value, part.strip()) for part in parts)
+                return any(evaluate_text_condition(cell_value, part.strip(), row) for part in parts)
             
             if condition.startswith("='"):
                 # Exact match (case insensitive)
@@ -1968,6 +2176,13 @@ def apply_conditional_formatting(
                 # Ends with text (case insensitive)
                 text = condition[11:-2].lower() if condition.endswith("')") else condition[11:-1].lower()
                 return cell_value.endswith(text)
+            elif condition.upper().startswith("REGEX('"):
+                # Regular expression match
+                pattern = condition[7:-2] if condition.endswith("')") else condition[7:-1]
+                try:
+                    return bool(re.search(pattern, cell_value))
+                except re.error:
+                    return False
             
             return False
         
@@ -1983,36 +2198,112 @@ def apply_conditional_formatting(
                 parts = condition.upper().split(" OR ")
                 return any(evaluate_blank_condition(cell_value, part.strip()) for part in parts)
             
-            if condition.upper() == "=ISBLANK()":
+            if condition.upper() == "=ISBLANK()" or condition.upper() == "ISBLANK()":
                 return is_blank
-            elif condition.upper() == "<>ISBLANK()":
+            elif condition.upper() == "<>ISBLANK()" or condition.upper() == "NOTBLANK()":
                 return not is_blank
             return False
+            
+        def evaluate_date_condition(cell_value, condition, row=None):
+            import datetime as dt
+            
+            # Excel epoch for date calculations
+            excel_epoch = dt.datetime(1899, 12, 30)
+            
+            # Convert cell value to date
+            cell_date = None
+            if isinstance(cell_value, dt.datetime):
+                cell_date = cell_value
+            elif isinstance(cell_value, (int, float)):
+                # Excel stores dates as number of days since epoch
+                try:
+                    cell_date = excel_epoch + dt.timedelta(days=cell_value)
+                except Exception:
+                    return False
+            else:
+                # Try parsing string with provided format
+                if date_format:
+                    try:
+                        cell_date = dt.datetime.strptime(str(cell_value), date_format)
+                    except Exception:
+                        return False
+                else:
+                    # Try some common formats
+                    common_formats = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y", "%m-%d-%Y"]
+                    for fmt in common_formats:
+                        try:
+                            cell_date = dt.datetime.strptime(str(cell_value), fmt)
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        return False
+            
+            # Replace TODAY() with current date
+            if "TODAY(" in condition.upper():
+                today = dt.datetime.today()
+                today_excel_days = (today.date() - excel_epoch.date()).days
+                condition = re.sub(r'TODAY\(\)', str(today_excel_days), condition, flags=re.IGNORECASE)
+            
+            # Replace DATE(year, month, day) with Excel date value
+            date_patterns = re.findall(r'DATE\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)', condition, re.IGNORECASE)
+            for year, month, day in date_patterns:
+                try:
+                    date_obj = dt.datetime(int(year), int(month), int(day))
+                    excel_days = (date_obj.date() - excel_epoch.date()).days
+                    condition = re.sub(r'DATE\(' + year + r'\s*,\s*' + month + r'\s*,\s*' + day + r'\)', 
+                                      str(excel_days), condition)
+                except Exception:
+                    pass
+            
+            # Get Excel serial date value for comparison
+            cell_excel_days = (cell_date.date() - excel_epoch.date()).days
+            
+            # Now evaluate as numeric condition
+            return evaluate_numeric_condition(cell_excel_days, condition, row)
         
         # Master condition evaluator that handles compound conditions across different types
-        def evaluate_condition(cell_value, condition):
+        def evaluate_condition(cell_value, condition, row=None, col=None):
+            # Extract any column references in the condition
+            cell_ref = None
+            if row and col:
+                cell_ref = f"{get_column_letter(col)}{row}"
+                
+                # If this cell contains a formula, use the calculated value from data_only worksheet
+                if cell_ref in calculated_values and handle_formulas:
+                    cell_value = calculated_values[cell_ref]
+            
             # First check for top-level compound conditions
             if " AND " in condition.upper():
                 parts = condition.upper().split(" AND ")
-                return all(evaluate_condition(cell_value, part.strip()) for part in parts)
+                return all(evaluate_condition(cell_value, part.strip(), row, col) for part in parts)
                 
             if " OR " in condition.upper():
                 parts = condition.upper().split(" OR ")
-                return any(evaluate_condition(cell_value, part.strip()) for part in parts)
+                return any(evaluate_condition(cell_value, part.strip(), row, col) for part in parts)
             
+            # Check if we're dealing with a date condition
+            if ("DATE(" in condition.upper() or "TODAY(" in condition.upper()) and not condition.startswith("='"):
+                return evaluate_date_condition(cell_value, condition, row)
+                
             # Then evaluate based on condition type
             # Numeric conditions
             if any(condition.startswith(op) for op in ["=", ">", "<", "<=", ">=", "<>"]) and not condition.startswith("='") and not condition.startswith("<>'"):
-                return evaluate_numeric_condition(cell_value, condition)
+                return evaluate_numeric_condition(cell_value, condition, row)
             
             # Text conditions
             elif condition.startswith("='") or condition.startswith("<>'") or \
-                 condition.upper().startswith(("CONTAINS('"), ("STARTS_WITH('"), ("ENDS_WITH(")):
-                return evaluate_text_condition(cell_value, condition)
+                 condition.upper().startswith(("CONTAINS('"), ("STARTS_WITH('"), ("ENDS_WITH("), ("REGEX(")):
+                return evaluate_text_condition(cell_value, condition, row)
             
             # Blank/not blank conditions
-            elif condition.upper() in ["=ISBLANK()", "<>ISBLANK()"]:
+            elif condition.upper() in ["=ISBLANK()", "<>ISBLANK()", "ISBLANK()", "NOTBLANK()"]:
                 return evaluate_blank_condition(cell_value, condition)
+                
+            # If we have column references in the condition like {profit} or {C}
+            if "{" in condition and "}" in condition:
+                # Already handled in the specific condition evaluators
+                return evaluate_numeric_condition(cell_value, condition, row)
                 
             # Fallback
             return False
@@ -2030,11 +2321,21 @@ def apply_conditional_formatting(
                 
             # If we're checking a specific column for the condition
             if condition_col_idx:
+                # Get cell from the regular worksheet
                 cell = worksheet.cell(row=row, column=condition_col_idx)
                 cell_value = cell.value
                 
+                # If handling formulas and this is a formula cell, use the calculated value
+                if handle_formulas:
+                    cell_ref = f"{get_column_letter(condition_col_idx)}{row}"
+                    if cell_ref in calculated_values:
+                        cell_value = calculated_values[cell_ref]
+                    else:
+                        # Get from data_only worksheet
+                        cell_value = worksheet_data_only.cell(row=row, column=condition_col_idx).value
+                
                 # Use the master condition evaluator
-                should_format = evaluate_condition(cell_value, condition)
+                should_format = evaluate_condition(cell_value, condition, row, condition_col_idx)
                 
                 # If condition is met, add row to formatting list
                 if should_format:
@@ -2043,26 +2344,42 @@ def apply_conditional_formatting(
                     else:
                         cells_to_format.append((row, condition_col_idx))
             else:
-                # Original behavior: check each cell in the range
+                # Check each cell in the range
+                row_matched = False
                 for col in range(min_col, max_col + 1):
                     cell = worksheet.cell(row=row, column=col)
                     cell_value = cell.value
                     
+                    # If handling formulas and this is a formula cell, use the calculated value
+                    if handle_formulas:
+                        cell_ref = f"{get_column_letter(col)}{row}"
+                        if cell_ref in calculated_values:
+                            cell_value = calculated_values[cell_ref]
+                        else:
+                            # Get from data_only worksheet
+                            cell_value = worksheet_data_only.cell(row=row, column=col).value
+                    
                     # Use the master condition evaluator
-                    should_format = evaluate_condition(cell_value, condition)
+                    should_format = evaluate_condition(cell_value, condition, row, col)
                     
                     # If condition is met, add cell to formatting list
                     if should_format:
-                        if format_entire_row or should_format_specific_columns:
-                            rows_to_format.add(row)
-                            break  # Once we know the row should be formatted, no need to check other cells
-                        else:
+                        row_matched = True
+                        if not (format_entire_row or should_format_specific_columns):
                             cells_to_format.append((row, col))
+                
+                # If any cell in the row matched and we're formatting entire rows
+                if row_matched and (format_entire_row or should_format_specific_columns):
+                    rows_to_format.add(row)
         
         # Apply formatting to entire rows if needed
         if format_entire_row and rows_to_format:
+            # Determine the full range of columns to format
+            min_format_col = 1  # Start from the first column in the worksheet
+            max_format_col = worksheet.max_column  # Format all columns in the worksheet
+            
             for row in rows_to_format:
-                for col in range(min_col, max_col + 1):
+                for col in range(min_format_col, max_format_col + 1):
                     cell = worksheet.cell(row=row, column=col)
                     
                     # Apply font if any font properties set
@@ -2093,10 +2410,15 @@ def apply_conditional_formatting(
                         cell.border = border
                     
                     formatted_cells_count += 1
+                    
         # Apply formatting to specific columns in matching rows
         elif should_format_specific_columns and rows_to_format:
+            # Use both specified format columns and outside range columns
+            all_format_columns = list(format_col_indices)
+            all_format_columns.extend(outside_range_indices)
+            
             for row in rows_to_format:
-                for col_idx in format_col_indices:
+                for col_idx in all_format_columns:
                     cell = worksheet.cell(row=row, column=col_idx)
                     
                     # Apply font if any font properties set
@@ -2128,41 +2450,92 @@ def apply_conditional_formatting(
                     
                     formatted_cells_count += 1
         else:
-            # Apply formatting to individual cells
+            # Apply formatting to individual cells, plus any outside range columns if specified
+            processed_cells = set()  # Track cells we've already processed
+            
             for row, col in cells_to_format:
-                cell = worksheet.cell(row=row, column=col)
-                
-                # Apply font if any font properties set
-                if font_args:
-                    # Start with existing font and update properties
-                    new_font = Font(
-                        name=cell.font.name,
-                        bold=cell.font.bold,
-                        italic=cell.font.italic,
-                        size=cell.font.size,
-                        color=cell.font.color
-                    )
-                    # Update with specified properties
-                    for key, value in font_args.items():
-                        setattr(new_font, key, value)
-                    cell.font = new_font
-                
-                # Apply fill if specified
-                if fill:
-                    cell.fill = fill
+                # Format the cell that matched the condition
+                if (row, col) not in processed_cells:
+                    cell = worksheet.cell(row=row, column=col)
                     
-                # Apply alignment if specified
-                if align:
-                    cell.alignment = align
+                    # Apply font if any font properties set
+                    if font_args:
+                        # Start with existing font and update properties
+                        new_font = Font(
+                            name=cell.font.name,
+                            bold=cell.font.bold,
+                            italic=cell.font.italic,
+                            size=cell.font.size,
+                            color=cell.font.color
+                        )
+                        # Update with specified properties
+                        for key, value in font_args.items():
+                            setattr(new_font, key, value)
+                        cell.font = new_font
                     
-                # Apply border if specified
-                if border:
-                    cell.border = border
+                    # Apply fill if specified
+                    if fill:
+                        cell.fill = fill
+                        
+                    # Apply alignment if specified
+                    if align:
+                        cell.alignment = align
+                        
+                    # Apply border if specified
+                    if border:
+                        cell.border = border
+                    
+                    processed_cells.add((row, col))
+                    formatted_cells_count += 1
                 
-                formatted_cells_count += 1
+                # Format outside range columns for this row if specified
+                if outside_range_indices:
+                    for outside_col in outside_range_indices:
+                        if (row, outside_col) not in processed_cells:
+                            outside_cell = worksheet.cell(row=row, column=outside_col)
+                            
+                            # Apply font if any font properties set
+                            if font_args:
+                                # Start with existing font and update properties
+                                new_font = Font(
+                                    name=outside_cell.font.name,
+                                    bold=outside_cell.font.bold,
+                                    italic=outside_cell.font.italic,
+                                    size=outside_cell.font.size,
+                                    color=outside_cell.font.color
+                                )
+                                # Update with specified properties
+                                for key, value in font_args.items():
+                                    setattr(new_font, key, value)
+                                outside_cell.font = new_font
+                            
+                            # Apply fill if specified
+                            if fill:
+                                outside_cell.fill = fill
+                                
+                            # Apply alignment if specified
+                            if align:
+                                outside_cell.alignment = align
+                                
+                            # Apply border if specified
+                            if border:
+                                outside_cell.border = border
+                            
+                            processed_cells.add((row, outside_col))
+                            formatted_cells_count += 1
+        
+        # Apply icon sets if specified
+        if icon_set:
+            # This is a simplified version - actual icon sets require different approach
+            # For now, just provide a message about the limitation
+            icon_set_message = f"Note: Icon set '{icon_set}' was requested but requires Excel's built-in conditional formatting feature."
+        else:
+            icon_set_message = None
         
         # Save workbook
         wb.save(filepath)
+        if wb_data_only:
+            wb_data_only.close()
         wb.close()
         
         # Format message based on formatting mode
@@ -2172,21 +2545,30 @@ def apply_conditional_formatting(
         
         condition_info = f" in column {condition_column}" if condition_column else ""
         
-        return {
+        result = {
             "success": True,
             "message": f"Conditional formatting applied to {formatted_cells_count} {format_mode} matching condition '{condition}'{condition_info} in range {cell_range}",
             "cells_formatted": formatted_cells_count,
             "condition_applied": condition,
-            "formatted_entire_rows": format_entire_row
+            "formatted_entire_rows": format_entire_row,
+            "formula_handling_enabled": handle_formulas
         }
+        
+        if icon_set_message:
+            result["icon_set_message"] = icon_set_message
+            
+        return result
+        
     except Exception as e:
         logger.error(f"Failed to apply conditional formatting: {e}")
         if 'wb' in locals():
             wb.close()
+        if 'wb_data_only' in locals() and wb_data_only:
+            wb_data_only.close()
         return {
             "success": False,
             "error": f"Failed to apply conditional formatting: {str(e)}"
-        } 
+        }
 
 def evaluate_excel_formula(formula_str: str, context_values: dict = None) -> Dict[str, Any]:
     """Evaluate an Excel formula using the formulas library.

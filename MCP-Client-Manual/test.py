@@ -32,7 +32,7 @@ def get_server_info() -> str:
 
 @mcp.resource("greeting://{name}")
 def get_greeting(name: str) -> str:
-    """Get a personalized greeting"""
+    """Get a personalized greeting"""   
     return f"Hello, {name}! Welcome to the Calculator Server."
 
 if __name__ == "__main__":

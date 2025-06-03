@@ -1,73 +1,104 @@
-import asyncio
+import asyncio 
 from mcp_client import MCPClient
 
 async def main():
     client = MCPClient()
-    server_script_path = "server.py"  # Path to your server script
-    
     try:
-        # Connect to the server
-        await client.connect_to_server(server_script_path)
+        # Connect to server
+        print("Connecting to MCP server...")
+        success = await client.connect_to_server("D:\\MCP\\file-system\\server.py")
+        if not success:
+            print("Failed to connect to server")
+            return
+            
+        # List tools
+        tools = await client.get_mcp_tools()
+        print(f"\nAvailable tools: {[tool.name for tool in tools]}")
         
-        if client.session:
-            print("\n=== Testing MCP Tools ===")
-            
-            # Test add function
-            result = await client.session.call_tool("add", {"a": 10, "b": 5})
-            print(f"10 + 5 = {result.content[0].text}")
-            
-            # Test multiply function
-            result = await client.session.call_tool("multiply", {"a": 7, "b": 8})
-            print(f"7 * 8 = {result.content[0].text}")
-            
-            # Test area calculation
-            result = await client.session.call_tool("calculate_area", {"length": 12.5, "width": 8.0})
-            print(f"Area of rectangle (12.5 x 8.0) = {result.content[0].text}")
-            
-            # Test weather info
-            result = await client.session.call_tool("get_weather_info", {"city": "Kathmandu"})
-            print(f"Weather: {result.content[0].text}")
-            
-            print("\n=== Testing Resources ===")
-            
-            # Test server info resource
-            resources = await client.session.list_resources()
-            print(f"Available resources: {[r.uri for r in resources.resources]}")
-            
-            # Read server info
-            server_info = await client.session.read_resource("info://server")
-            print(f"Server info: {server_info.contents[0].text}")
-            
-            # Read greeting resource
-            greeting = await client.session.read_resource("greeting://Alice")
-            print(f"Greeting: {greeting.contents[0].text}")
-            
-            print("\n=== Using with Gemini ===")
-            
-            # Example of using MCP tools with Gemini
-            if client.llm:
-                # Get calculation result
-                calc_result = await client.session.call_tool("add", {"a": 25, "b": 17})
-                number = calc_result.content[0].text
+        # Interactive loop
+        print("\n" + "="*50)
+        print("MCP Client Ready!")
+        print("Commands: 'quit' to exit, 'clear' to clear history, 'debug' to show tool schemas, 'history' to show conversation")
+        print("="*50)
+        
+        while True:
+            try:
+                user_input = input("\nYour query: ").strip()
                 
-                # Ask Gemini to explain the result
-                prompt = f"The result of 25 + 17 is {number}. Can you explain this calculation and give me a fun fact about the number {number}?"
-                response = client.llm.generate_content(prompt)
-                print(f"Gemini says: {response.text}")
-            
-        # Keep running for a bit to see everything
-        print("\n=== Connection successful! ===")
-        await asyncio.sleep(2)
-        
-    except KeyboardInterrupt:
-        print("\nShutting down...")
+                if user_input.lower() == 'quit':
+                    break
+                elif user_input.lower() == 'clear':
+                    client.clear_conversation()
+                    continue
+                elif user_input.lower() == 'debug':
+                    client.debug_tools_schema()
+                    continue
+                elif user_input.lower() == 'history':
+                    history = client.get_conversation_history()
+                    print("\nConversation History:")
+                    for msg in history:
+                        role = msg.get('role', 'unknown')
+                        content = msg.get('content', '')
+                        if role == 'function':
+                            name = msg.get('name', 'unknown')
+                            print(f"  {role} ({name}): {content[:100]}...")
+                        else:
+                            print(f"  {role}: {content[:100]}...")
+                    continue
+                elif not user_input:
+                    continue
+                
+                print("\nProcessing query...")
+                
+                # Process query using the client's method
+                messages = await client.process_query(user_input)
+                
+                print("\n" + "-"*40)
+                print("RESPONSE:")
+                print("-"*40)
+                
+                if messages:
+                    # Show only the latest assistant response
+                    latest_assistant_msg = None
+                    for msg in reversed(messages):
+                        if msg.get('role') == 'assistant':
+                            latest_assistant_msg = msg
+                            break
+                    
+                    if latest_assistant_msg:
+                        print(latest_assistant_msg['content'])
+                    else:
+                        print("No assistant response found")
+                        
+                    # Optionally show full conversation
+                    show_full = input("\nShow full conversation? (y/n): ").lower() == 'y'
+                    if show_full:
+                        print("\nFull Conversation:")
+                        for i, message in enumerate(messages):
+                            role = message.get('role', 'unknown')
+                            content = message.get('content', '')
+                            if role == 'function':
+                                name = message.get('name', 'unknown')
+                                print(f"{i+1}. {role} ({name}): {content}")
+                            else:
+                                print(f"{i+1}. {role}: {content}")
+                else:
+                    print("No response received")
+                    
+            except KeyboardInterrupt:
+                print("\n\nExiting...")
+                break
+            except Exception as e:
+                print(f"\nError processing query: {e}")
+                continue
+                
     except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up
-        await client.exit_stack.aclose()
-
+        print(f"Fatal error: {e}")
+        return None
+    finally:    
+        print("\nCleaning up...")
+        await client.cleanup()
+        print("Goodbye! 👋")
+        
 if __name__ == "__main__":
     asyncio.run(main())

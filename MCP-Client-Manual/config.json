@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "file-system": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "PyPDF2",
+        "--with",
+        "python-docx",
+        "--with",
+        "openpyxl",
+        "--with",
+        "python-pptx",
+        "--with",
+        "pillow",
+        "--with",
+        "pymupdf",
+        "--with",
+        "pdfplumber",
+        "--with",
+        "tabula-py",
+        "--with",
+        "ebooklib",
+        "--with",
+        "beautifulsoup4",
+        "--with",
+        "striprtf",
+        "--with",
+        "formulas",
+        "--with",
+        "pandas",
+        "--with",
+        "xlwings",
+        "D:\\MCP\\file-system\\server.py",
+        "D:\\MCP",
+        "C:\\Users\\pande\\OneDrive\\Desktop",
+        "C:\\Users\\pande\\Downloads"
+      ]
+    }
+  }
+} 
